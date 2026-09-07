@@ -1,0 +1,44 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== 敏感配置（绝不入库）=====
+.env
+
+# ===== IDE =====
+.idea/
+
+# ===== 项目数据（原始文档 / 中间产物 / 评测集，体积大且可能含个人信息）=====
+data/raw/*
+data/processed/*
+data/eval/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/eval/.gitkeep
+
+# ===== 模型权重 =====
+models/
+*.pt
+*.bin
+*.safetensors
+
+# ===== 日志与运行产物 =====
+logs/
+*.log
+rag_eval_report.csv
+
+# ===== 中间件本地存储 =====
+volumes/
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
