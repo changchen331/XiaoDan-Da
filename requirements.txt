@@ -1,0 +1,36 @@
+# ============================================================
+# 小旦答：复旦校园智能问答与心理健康监测系统
+# 依赖按模块分组，可按开发进度分批安装
+# GPU 训练环境请单独安装 CUDA 版 torch，此处版本约束两者通用
+# ============================================================
+
+# ===== 模块三：Agent 核心引擎（最先开发，先装这批）=====
+langgraph>=0.2.0
+langgraph-checkpoint-postgres>=1.0.0   # PostgresSaver 短期记忆
+openai>=1.40.0                         # DeepSeek / vLLM 均兼容 OpenAI 协议
+python-dotenv>=1.0.0
+
+# ===== 模块一：知识库引擎 =====
+pymilvus>=2.4.0                        # Milvus 客户端（hybrid_search + RRF）
+unstructured>=0.15.0                   # PDF/HTML/DOCX 统一解析
+FlagEmbedding>=1.2.0                   # BGE-M3（双路向量）+ BGE-Reranker-v2-M3
+requests>=2.31.0                       # 官网爬虫
+beautifulsoup4>=4.12.0                 # 官网爬虫 HTML 解析
+
+# ===== 模块二：情绪检测引擎 =====
+torch>=2.1.0
+transformers>=4.40.0                   # XLM-RoBERTa 微调与推理
+datasets>=2.19.0
+scikit-learn>=1.4.0                    # 评测混淆矩阵 / 训练集切分
+
+# ===== 模块四：评估与可观测 =====
+ragas>=0.1.9                           # RAG 五指标评测
+langchain-openai>=0.1.0                # RAGAS 裁判模型的 LangChain 封装
+langchain-huggingface>=0.0.3           # RAGAS 本地 embedding
+pandas>=2.0.0                          # 评测明细导出
+langfuse>=2.27.0                       # 全链路追踪（开关式，未配置 keys 不生效）
+
+# ===== 模块五：服务化 =====
+fastapi>=0.110.0
+uvicorn>=0.29.0
+psycopg2-binary>=2.9.0                # PostgreSQL 驱动（记忆 / 上报 / Checkpointer）
