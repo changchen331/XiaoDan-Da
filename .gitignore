@@ -26,8 +26,9 @@ data/eval/*
 !data/eval/.gitkeep
 小旦答：复旦校园智能问答与心理健康监测系统.md
 
-# ===== 模型权重 =====
-models/
+# ===== 模型权重（目录结构保留，权重文件不入库）=====
+models/*
+!models/.gitkeep
 *.pt
 *.bin
 *.safetensors
@@ -36,6 +37,9 @@ models/
 logs/
 *.log
 rag_eval_report.csv
+outputs/                  # Trainer 训练中间产物（最优权重另存 models/）
+.pytest_cache/
+hf_cache/                 # HuggingFace 模型下载缓存（Docker 挂载目录）
 
 # ===== 中间件本地存储 =====
 volumes/
