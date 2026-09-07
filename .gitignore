@@ -24,6 +24,7 @@ data/eval/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/eval/.gitkeep
+小旦答：复旦校园智能问答与心理健康监测系统.md
 
 # ===== 模型权重 =====
 models/
