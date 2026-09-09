@@ -1,7 +1,7 @@
 """小旦答命令行交互入口（开发调试用；正式入口见 deployment/api.py）。
 
 用法：python main.py
-前置条件：pip install -r requirements.txt，并在 .env 中配置 DEEPSEEK_API_KEY
+前置条件：uv sync（或在已激活的 .venv 中），并在 .env 中配置 DEEPSEEK_API_KEY
 """
 from agent.graph import invoke
 

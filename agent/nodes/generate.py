@@ -20,6 +20,8 @@ GENERATE_PROMPT = """你是"小旦答"，复旦大学的校园智能问答助手
 2. 如果参考资料不足以回答问题，明确说明"根据现有信息无法确定"，并建议用户联系相关部门
 3. 回答中不要提及"根据参考资料"或"根据文档"等字样，直接给出答案
 4. 涉及时间敏感的信息（如截止日期、政策版本）时，注明信息所属的时间
+5. 请使用{response_language}组织回答；若用户在对话历史中明确要求过
+   某种语言，以用户的要求为准
 
 ## 参考资料
 {context_text}
@@ -60,6 +62,7 @@ def generate(state: AgentState) -> dict:
 
     prompt = GENERATE_PROMPT.format(
         context_text=context_text,
+        response_language=state.get("response_language", "中文"),
         memory_text=memory_text,
         history_rounds=settings.HISTORY_MAX_ROUNDS,
         history_text=history_text,

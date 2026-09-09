@@ -1,13 +1,14 @@
-"""节点：记忆写入——本轮对话摘要写入长期记忆，同时输出最终回答。
+"""节点：记忆写入——本轮对话摘要写入长期记忆，职责纯化不再触碰回复内容。
 
-职责拆分：
-- 短期记忆：LangGraph Checkpointer 自动持久化（thread_id 即 session_id），
-  本节点无需处理
-- 长期记忆：调用轻量模型生成一句话摘要，写入 user_memory 表，
-  供后续会话的生成环节做个性化注入
+职责边界（上游 care_suffix 已产出 final_response）：
+- 本节点只负责记忆：生成摘要 + 写库 + 结束标记
+- 回复加工（分级关怀后缀等）一律由 care_suffix 节点承担，
+  两者通过 State 解耦，各自可独立演化与测试
 
-FAQ 命中的路径也经过本节点（标准答案同样值得记忆——
-用户连续问同一 FAQ 时可观察出高频问题，为 FAQ 库扩充提供依据）。
+短期记忆：LangGraph Checkpointer 自动持久化（thread_id 即 session_id），
+本节点无需处理。
+长期记忆：调用轻量模型生成一句话摘要，写入 user_memory 表，
+供后续会话的生成环节做个性化注入。
 """
 from agent.llm_clients import chat_qwen
 from agent.memory_store import insert_memory
@@ -21,9 +22,9 @@ SUMMARY_PROMPT = """请用一句话概括以下对话的核心信息，包括用
 
 
 def memory_write(state: AgentState) -> dict:
-    """生成本轮对话摘要写入长期记忆，输出 final_response 并结束流程。"""
+    """生成本轮对话摘要写入长期记忆，透传 final_response 并结束流程。"""
     user_input = state["user_input"]
-    response = state["generated_response"]
+    response = state["final_response"]
     user_id = state.get("user_id", "anonymous")
     session_id = state.get("session_id", "default")
     intent = state.get("intent")
@@ -43,4 +44,4 @@ def memory_write(state: AgentState) -> dict:
         intent=intent.category if intent else "简单问答",
     )
 
-    return {"memory_summary": summary, "final_response": response, "should_end": True}
+    return {"memory_summary": summary, "should_end": True}

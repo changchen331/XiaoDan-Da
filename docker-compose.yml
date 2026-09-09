@@ -39,7 +39,7 @@ services:
   # ---------- Milvus 向量数据库 ----------
   milvus:
     image: milvusdb/milvus:v2.4.15
-    command: ["milvus", "run", "standalone"]
+    command: [ "milvus", "run", "standalone" ]
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
@@ -52,7 +52,7 @@ services:
       - etcd
       - minio
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      test: [ "CMD", "curl", "-f", "http://localhost:9091/healthz" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -62,14 +62,15 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: xiaodan
-      POSTGRES_PASSWORD: changeme    # 生产环境请通过 .env 覆盖为强密码
+      # 密码与 api 服务读取同一变量，宿主机 / 容器永不漂移
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: xiaodan
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xiaodan"]
+      test: [ "CMD-SHELL", "pg_isready -U xiaodan" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -84,15 +85,50 @@ services:
     environment:
       # 数据库与向量库连接（服务名即容器网络内的主机名）
       MILVUS_URI: http://milvus:19530
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-xiaodan_kb}
+      MILVUS_FAQ_COLLECTION: ${MILVUS_FAQ_COLLECTION:-xiaodan_faq}
       POSTGRES_HOST: postgres
-      # 其余配置（API Key / 轻量端点 / Langfuse）从 .env 文件透传
+      # 密码与 postgres 服务读取同一变量，双侧对齐
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      # ===== LLM 端点（从 .env 透传，未配置时回落代码默认值）=====
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_TIMEOUT: ${DEEPSEEK_TIMEOUT:-30}
       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-dummy}
       LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-15}
+      # ===== 嵌入 / 重排模型 =====
+      EMBED_MODEL_NAME: ${EMBED_MODEL_NAME:-BAAI/bge-m3}
+      RERANK_MODEL_NAME: ${RERANK_MODEL_NAME:-BAAI/bge-reranker-v2-m3}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+      EMOTION_MODEL_PATH: ${EMOTION_MODEL_PATH:-models/emotion-xlmr}
+      # ===== 检索 / 情绪 / 流程可调参数（默认值与 settings.py 一致）=====
+      HYBRID_TOP_K: ${HYBRID_TOP_K:-20}
+      RERANK_TOP_K: ${RERANK_TOP_K:-5}
+      FAQ_MATCH_THRESHOLD: ${FAQ_MATCH_THRESHOLD:-0.85}
+      HIGH_RISK_PROB_THRESHOLD: ${HIGH_RISK_PROB_THRESHOLD:-0.5}
+      ESCALATION_ROUNDS: ${ESCALATION_ROUNDS:-3}
+      MAX_RETRY: ${MAX_RETRY:-2}
+      RECURSION_LIMIT: ${RECURSION_LIMIT:-25}
+      HISTORY_MAX_ROUNDS: ${HISTORY_MAX_ROUNDS:-10}
+      # ===== 关怀渠道信息（中度困扰后缀注入，真实联系方式由部署方在 .env 填入）=====
+      CARE_CENTER_INFO_ZH: "${CARE_CENTER_INFO_ZH:-如需支持，可联系学校心理咨询中心（联系方式请向辅导员或校官网查询）。}"
+      CARE_CENTER_INFO_EN: "${CARE_CENTER_INFO_EN:-If you need support, please contact the university counseling center (contact details available from your counselor or the official website).}"
+      # ===== 高危上报邮箱 =====
+      ALERT_EMAIL_ENABLED: ${ALERT_EMAIL_ENABLED:-false}
+      ALERT_SMTP_HOST: ${ALERT_SMTP_HOST:-}
+      ALERT_SMTP_PORT: ${ALERT_SMTP_PORT:-465}
+      ALERT_SENDER: ${ALERT_SENDER:-}
+      ALERT_RECEIVER: ${ALERT_RECEIVER:-}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      # ===== 评测裁判与 Langfuse 追踪 =====
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      JUDGE_MODEL: ${JUDGE_MODEL:-gpt-4o-2024-08-06}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      # 容器内访问 Langfuse 走服务名而非 localhost
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
     volumes:
       # 知识库数据与模型权重通过挂载注入，镜像不含任何业务数据（去敏）
@@ -110,7 +146,7 @@ services:
   # ---------- Langfuse 追踪面板（v2 单容器版，开箱即用） ----------
   langfuse:
     image: langfuse/langfuse:2
-    profiles: ["observability"]
+    profiles: [ "observability" ]
     ports:
       - "3000:3000"
     environment:
@@ -124,7 +160,7 @@ services:
   # ---------- Langfuse 专用数据库（与业务库隔离） ----------
   langfuse-db:
     image: postgres:16
-    profiles: ["observability"]
+    profiles: [ "observability" ]
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse

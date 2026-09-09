@@ -72,6 +72,22 @@ class Settings:
     ALERT_RECEIVER: str = os.getenv("ALERT_RECEIVER", "")
     ALERT_SMTP_PASSWORD: str = os.getenv("ALERT_SMTP_PASSWORD", "")
 
+    # ==================== 模块二：轻/中度关怀渠道信息 ====================
+
+    # 心理咨询中心的求助渠道（中英各一份），供 care_suffix 节点在中度困扰的
+    # 回复末尾附加。从 .env 注入而非写死在代码 / LLM prompt 里：
+    # - 脱敏：仓库内只留占位符，公开仓库不携带真实联系方式
+    # - 防编造：prompt 要求 LLM 原样保留渠道文本，电话 / 链接绝不出自模型
+    CARE_CENTER_INFO_ZH: str = os.getenv(
+        "CARE_CENTER_INFO_ZH",
+        "如需支持，可联系学校心理咨询中心（联系方式请向辅导员或校官网查询）。",
+    )
+    CARE_CENTER_INFO_EN: str = os.getenv(
+        "CARE_CENTER_INFO_EN",
+        "If you need support, please contact the university counseling center "
+        "(contact details available from your counselor or the official website).",
+    )
+
     # ==================== 模块三：流程控制 ====================
 
     MAX_RETRY: int = int(os.getenv("MAX_RETRY", "2"))           # 质量评估不合格最多重试 2 次

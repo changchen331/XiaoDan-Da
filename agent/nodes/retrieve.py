@@ -1,9 +1,18 @@
-"""节点：检索——简单问答分支，对改写后的 query 执行混合检索 + 重排。
+"""节点：检索——统一入口：FAQ 预查 + 混合检索 + 重排。
 
-本节点是模块一检索服务在 Agent 图中的接入点：
-改写 query → BGE-M3 双路向量化 → 元数据过滤（身份 + 学期时效）
-→ Milvus 混合检索（dense/sparse 各 top20，RRF 融合）→ Reranker 精排取 top5。
+两条路径合流于此（简单问答与 FAQ 意图均路由到本节点）：
+快路径：FAQ 专用索引向量匹配（约 10ms）→ 相似度 > 0.85 →
+        Qwen 轻量校验（答案适配 + 语言匹配）→ 通过则标准答案直返，
+        跳过生成与质检（响应延迟秒级 → 百毫秒级）。
+慢路径：BGE-M3 双路向量化 → 元数据过滤（身份 + 学期时效）→
+        Milvus 混合检索（dense/sparse 各 top20，RRF 融合）→
+        Reranker 精排取 top5，交由 generate 生成。
+
+快路径不依赖意图分类的准确性：即使高频问题被误分类为"简单问答"，
+预查依然先于混合检索执行，秒回能力不受分类器影响；
+质量评估不合格回退到本节点重试时同样先过 FAQ 预查。
 """
+from agent.faq_verify import verify_faq_match
 from agent.state import AgentState
 from config.settings import settings, get_current_semester
 
@@ -31,8 +40,39 @@ def build_filter_expr(user_profile: dict) -> str:
     )
 
 
+def _faq_precheck(query: str, response_language: str) -> dict | None:
+    """FAQ 快路径预查：索引匹配 + 轻量校验。
+
+    :param query: 改写后的检索 query
+    :param response_language: 用户期望的回复语言
+    :return: 可直返的命中结果 {"question", "answer", "score"}；
+        未命中 / 阈值不足 / 校验拒绝 / 索引异常均返回 None（走慢路径）
+    """
+    from knowledge_base.faq import get_faq_index
+
+    try:
+        matched = get_faq_index().match(query)
+    except Exception as faq_error:
+        # FAQ 索引异常（Milvus 不可达等）：静默降级到通用检索，流程不中断
+        print(f"[retrieve] FAQ 预查异常，降级通用检索: {faq_error}")
+        return None
+
+    if matched is None:
+        return None
+
+    # 高阈值命中后做轻量校验：防"问 A 答 B"与语言不匹配的直返
+    if not verify_faq_match(query, matched["question"], matched["answer"],
+                            response_language):
+        print(f"[retrieve] FAQ 命中被校验拒绝（相似度 {matched['score']:.3f}）: "
+              f"{matched['question']}")
+        return None
+
+    print(f"[retrieve] FAQ 命中（相似度 {matched['score']:.3f}）: {matched['question']}")
+    return matched
+
+
 def retrieve(state: AgentState) -> dict:
-    """执行混合检索 + 重排，结果写入 retrieved_contexts。
+    """检索入口节点：先 FAQ 预查，未命中走混合检索 + 重排。
 
     检索失败时返回空结果集：下游 generate 节点对空上下文有明确的
     "无法确定"应答策略，保证服务不因中间件故障而中断。
@@ -40,6 +80,18 @@ def retrieve(state: AgentState) -> dict:
     from knowledge_base.retrieval import get_retrieval_service
 
     query = state["intent"].rewritten_query
+    response_language = state.get("response_language", "中文")
+
+    # ===== 快路径：FAQ 专用索引预查 =====
+    matched = _faq_precheck(query, response_language)
+    if matched is not None:
+        return {
+            "faq_hit": True,
+            "generated_response": matched["answer"],  # 标准答案直接作为生成结果
+            "retrieved_contexts": [],                 # FAQ 命中无检索上下文
+        }
+
+    # ===== 慢路径：通用混合检索 =====
     filter_expr = build_filter_expr(state.get("user_profile", {}))
 
     try:
@@ -51,3 +103,10 @@ def retrieve(state: AgentState) -> dict:
         reranked = []
 
     return {"retrieved_contexts": reranked, "faq_hit": False}
+
+
+def route_after_retrieve(state: AgentState) -> str:
+    """检索后的条件路由：FAQ 命中走关怀后缀直返，未命中进生成流程。"""
+    if state.get("faq_hit"):
+        return "care_suffix"
+    return "generate"

@@ -70,8 +70,8 @@ def quality_check(state: AgentState) -> dict:
 
 
 def route_after_quality(state: AgentState) -> str:
-    """质量评估后的条件路由：合格写记忆，不合格回退检索重试。"""
+    """质量评估后的条件路由：合格走关怀后缀收尾，不合格回退检索重试。"""
     quality = state.get("quality")
     if quality is not None and quality.passed:
-        return "memory_write"
+        return "care_suffix"
     return "retrieve"

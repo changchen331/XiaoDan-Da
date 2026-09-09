@@ -1,11 +1,15 @@
 """核心逻辑单元测试：不依赖任何外部服务（LLM / 数据库 / 向量库），
-覆盖规则引擎、切分策略、文本清洗、两层降级、学期计算与 JSON 解析。
+覆盖规则引擎、切分策略、文本清洗、两层降级、学期计算与 JSON 解析、
+FAQ 校验信任策略、关怀后缀分级、条件路由与意图兜底。
 
 运行：python -m pytest tests/test_skeleton.py -v
 """
 from datetime import date
 
+import pytest
+
 from agent.llm_clients import parse_json_response
+from agent.state import EmotionResult, IntentResult
 from config.settings import get_current_semester
 from emotion.detector import detect_emotion
 from emotion.rule_engine import RuleEngine
@@ -133,6 +137,213 @@ def test_agent_state_fields() -> None:
     from agent.state import AgentState
 
     expected = {"user_input", "user_id", "session_id", "emotion", "intent",
-                "retrieved_contexts", "faq_hit", "generated_response", "quality",
-                "retry_count", "memory_summary", "final_response", "should_end"}
+                "response_language", "retrieved_contexts", "faq_hit",
+                "generated_response", "quality", "retry_count",
+                "memory_summary", "final_response", "should_end"}
     assert expected.issubset(set(AgentState.__annotations__))
+
+
+# ==================== FAQ 轻量校验 ====================
+
+def test_faq_verify_trust_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """信任阈值策略：校验调用自身异常时放行（快路径不因增强层故障失效）。"""
+    import agent.faq_verify as faq_verify_module
+
+    def _broken_call(prompt: str, system: str | None = None) -> str:
+        raise ValueError("模拟端点不可达")
+
+    monkeypatch.setattr(faq_verify_module, "chat_qwen_json", _broken_call)
+    assert faq_verify_module.verify_faq_match(
+        "校园卡丢了怎么办", "校园卡挂失流程", "请到一卡通中心挂失。", "中文") is True
+
+
+def test_faq_verify_rejects_answer_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """答案不适配被拒绝：问 A 答 B 时不得直返标准答案。"""
+    import agent.faq_verify as faq_verify_module
+
+    monkeypatch.setattr(
+        faq_verify_module, "chat_qwen_json",
+        lambda prompt, system=None: '{"answer_match": false, "language_match": true}')
+    assert faq_verify_module.verify_faq_match(
+        "校园卡补办收费吗", "校园卡挂失流程", "请到一卡通中心挂失。", "中文") is False
+
+
+def test_faq_verify_rejects_language_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """语言不匹配被拒绝：中文标准答案不直返给期望英文的用户。"""
+    import agent.faq_verify as faq_verify_module
+
+    monkeypatch.setattr(
+        faq_verify_module, "chat_qwen_json",
+        lambda prompt, system=None: '{"answer_match": true, "language_match": false}')
+    assert faq_verify_module.verify_faq_match(
+        "How do I report a lost campus card?", "校园卡挂失流程", "请到一卡通中心挂失。",
+        "English") is False
+
+
+# ==================== 关怀后缀分级 ====================
+
+def _make_state(emotion_level: str, response_language: str = "中文",
+                generated: str = "选课截止时间为 9 月 15 日。") -> dict:
+    """构造 care_suffix 单测所需的最小 State。"""
+    return {
+        "generated_response": generated,
+        "emotion": EmotionResult(level=emotion_level, source="分类模型", confidence=0.9),
+        "response_language": response_language,
+    }
+
+
+def test_care_suffix_normal_passthrough() -> None:
+    """正常情绪：回复原样透传，零额外内容。"""
+    from agent.nodes.care_suffix import care_suffix
+
+    state = _make_state("正常")
+    result = care_suffix(state)
+    assert result["final_response"] == "选课截止时间为 9 月 15 日。"
+
+
+def test_care_suffix_mild_fallback_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    """轻度困扰 + LLM 失败：降级中文固定模板（关怀后缀不因模型故障缺失）。"""
+    import importlib
+
+    # importlib 返回 sys.modules 的真实模块对象：nodes/__init__ 的
+    # from-import 会把同名属性遮蔽为节点函数，import as 拿不到模块
+    care_suffix_module = importlib.import_module("agent.nodes.care_suffix")
+
+    def _broken_call(prompt: str, system: str | None = None,
+                     temperature: float = 0.1) -> str:
+        raise ValueError("模拟轻量端点不可达")
+
+    monkeypatch.setattr(care_suffix_module, "chat_qwen", _broken_call)
+    result = care_suffix_module.care_suffix(_make_state("轻度困扰"))
+    assert result["final_response"].startswith("选课截止时间为 9 月 15 日。")
+    assert "注意休息" in result["final_response"]
+
+
+def test_care_suffix_moderate_fallback_contains_care_info(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """中度困扰 + LLM 失败：降级模板包含关怀与渠道信息（联系方式非模型编造）。"""
+    import importlib
+
+    care_suffix_module = importlib.import_module("agent.nodes.care_suffix")
+
+    def _broken_call(prompt: str, system: str | None = None,
+                     temperature: float = 0.1) -> str:
+        raise ValueError("模拟轻量端点不可达")
+
+    monkeypatch.setattr(care_suffix_module, "chat_qwen", _broken_call)
+    result = care_suffix_module.care_suffix(_make_state("中度困扰"))
+    assert "心理咨询中心" in result["final_response"]
+
+
+# ==================== 条件路由 ====================
+
+def _intent_state(category: str) -> dict:
+    """构造意图路由单测所需的最小 State。"""
+    return {"intent": IntentResult(category=category, confidence=0.9,
+                                   rewritten_query="测试查询")}
+
+
+def test_route_after_intent_merges_faq_into_retrieve() -> None:
+    """意图分流：FAQ 与简单问答合流到 retrieve（快路径不依赖分类准确性）。"""
+    from agent.nodes.intent_route import route_after_intent
+
+    assert route_after_intent(_intent_state("简单问答")) == "retrieve"
+    assert route_after_intent(_intent_state("FAQ")) == "retrieve"
+    assert route_after_intent(_intent_state("复杂查询")) == "plan_and_retrieve"
+    assert route_after_intent(_intent_state("闲聊越界")) == "chitchat_response"
+
+
+def test_route_after_retrieve_by_faq_hit() -> None:
+    """检索分流：FAQ 命中走关怀后缀直返，未命中进生成。"""
+    from agent.nodes.retrieve import route_after_retrieve
+
+    assert route_after_retrieve({"faq_hit": True}) == "care_suffix"
+    assert route_after_retrieve({"faq_hit": False}) == "generate"
+
+
+def test_route_after_care_suffix_chitchat_ends() -> None:
+    """关怀后缀分流：闲聊不写长期记忆直接结束，其余写入。"""
+    from langgraph.graph import END
+
+    from agent.nodes.care_suffix import route_after_care_suffix
+
+    assert route_after_care_suffix(_intent_state("闲聊越界")) == END
+    assert route_after_care_suffix(_intent_state("简单问答")) == "memory_write"
+    assert route_after_care_suffix({}) == END
+
+
+# ==================== 意图路由兜底 ====================
+
+def test_intent_route_fallback_keeps_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    """路由失败兜底：按简单问答处理并沿用既有语言偏好（跨轮持久化不被异常打断）。"""
+    import importlib
+
+    intent_route_module = importlib.import_module("agent.nodes.intent_route")
+
+    def _broken_call(prompt: str, system: str | None = None) -> str:
+        raise ValueError("模拟 JSON 解析失败")
+
+    monkeypatch.setattr(intent_route_module, "chat_qwen_json", _broken_call)
+    state = {
+        "user_input": "选课时间",
+        "conversation_history": [],
+        "user_profile": {"role": "本科生"},
+        "response_language": "English",
+    }
+    result = intent_route_module.intent_route(state)
+    assert result["intent"].category == "简单问答"
+    assert result["intent"].rewritten_query == "选课时间"
+    assert result["response_language"] == "English"
+
+
+def test_intent_route_parses_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    """正常解析：语言判定写入 State，作为会话级偏好的数据源。"""
+    import importlib
+
+    intent_route_module = importlib.import_module("agent.nodes.intent_route")
+
+    monkeypatch.setattr(
+        intent_route_module, "chat_qwen_json",
+        lambda prompt, system=None:
+        '{"category": "FAQ", "rewritten_query": "校园卡挂失", '
+        '"response_language": "English"}')
+    state = {
+        "user_input": "How to report a lost card?",
+        "conversation_history": [],
+        "user_profile": {"role": "留学生"},
+    }
+    result = intent_route_module.intent_route(state)
+    assert result["response_language"] == "English"
+    assert result["intent"].category == "FAQ"
+
+
+# ==================== 记忆写入职责纯化 ====================
+
+def test_memory_write_passthrough_final_response(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """记忆写入：只写记忆不碰回复内容，final_response 原样透传。"""
+    import importlib
+
+    memory_write_module = importlib.import_module("agent.nodes.memory_write")
+
+    monkeypatch.setattr(memory_write_module, "chat_qwen",
+                        lambda prompt, system=None, temperature=0.1: "用户问了选课截止时间")
+    captured: dict = {}
+
+    def _fake_insert(user_id: str, session_id: str, summary: str, intent: str) -> None:
+        captured.update(user_id=user_id, summary=summary, intent=intent)
+
+    monkeypatch.setattr(memory_write_module, "insert_memory", _fake_insert)
+    state = {
+        "user_input": "选课截止时间是什么时候？",
+        "final_response": "选课截止时间为 9 月 15 日。",
+        "user_id": "u1", "session_id": "s1",
+        "intent": IntentResult(category="简单问答", confidence=0.9,
+                               rewritten_query="选课截止时间"),
+    }
+    result = memory_write_module.memory_write(state)
+    # 职责纯化：不再写 final_response（回复加工由 care_suffix 承担）
+    assert "final_response" not in result
+    assert result["should_end"] is True
+    assert captured["intent"] == "简单问答"
+    assert captured["summary"] == "用户问了选课截止时间"

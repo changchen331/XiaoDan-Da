@@ -53,6 +53,13 @@ class AgentState(TypedDict, total=False):
     # ===== 意图路由结果 =====
     intent: Optional[IntentResult]
 
+    # ===== 语言偏好 =====
+    # 用户期望的回复语言（"中文" / "English"）：由意图路由结合当前输入语言与
+    # 对话中的明确语言指令（如"请用中文回答"）判定；经 Checkpointer 跨轮持久化，
+    # 同一会话说过一次即持续生效。仅影响面向用户的输出（generate / care_suffix），
+    # 不影响上报与高危关怀回复（固定中文，面向后台处理者）。
+    response_language: str
+
     # ===== 检索结果 =====
     retrieved_contexts: list           # RetrievedChunk 字典列表（text + metadata + score）
     faq_hit: bool                      # FAQ 高置信度命中标记（命中则跳过生成环节）

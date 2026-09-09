@@ -3,26 +3,32 @@
 执行路径：
     START → emotion_detect（每轮必经）
               ├─ 高危   → report → care_response → END
-              └─ 正常   → intent_route
-                            ├─ 简单问答 → retrieve ─────────────┐
-                            ├─ 复杂查询 → plan_and_retrieve ────┤→ generate → quality_check
-                            ├─ FAQ     → faq_match ─┬─ 命中 ──→ memory_write → END
-                            │                      └─ 未命中 ─→ generate（走上方路径）
-                            └─ 闲聊越界 → chitchat_response → END
-    quality_check ─ 合格 → memory_write → END
-                 └─ 不合格 → retrieve（重试，最多 2 次后强制放行）
+              └─ 正常   → intent_route（分类 + 改写 + 语言判定）
+                            ├─ 简单问答 ┐
+                            ├─ FAQ     ┴→ retrieve ─┬─ FAQ 预查命中 → care_suffix ─┬→ memory_write → END
+                            │                        └─ 未命中 → generate          │
+                            ├─ 复杂查询 → plan_and_retrieve → generate → quality_check
+                            │                                          ├─ 合格 → care_suffix ─┘
+                            │                                          └─ 不合格 → retrieve（重试≤2）
+                            └─ 闲聊越界 → chitchat_response → care_suffix → END（不写记忆）
+
+care_suffix 是所有正常输出路径的必经收尾节点（分级关怀后缀），
+其后的条件路由决定"写长期记忆 / 闲聊直接结束"。
+FAQ 专用索引的快路径内嵌在 retrieve 节点（预查 + 轻量校验），
+不设独立节点：与通用检索行为同构，合流后快路径不再依赖意图分类准确性。
 
 短期记忆：PostgresSaver 作为 Checkpointer（thread_id 即 session_id），
-同一会话的多轮输入自动携带历史状态；数据库不可用时自动降级为
-无记忆模式（由调用方显式传入 conversation_history 补偿）。
+同一会话的多轮输入自动携带历史状态（含 response_language 语言偏好）；
+数据库不可用时自动降级为无记忆模式（由调用方显式传入
+conversation_history 补偿）。
 """
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import (
     care_response,
+    care_suffix,
     chitchat_response,
     emotion_detect,
-    faq_match,
     generate,
     intent_route,
     memory_write,
@@ -31,10 +37,11 @@ from agent.nodes import (
     report,
     retrieve,
 )
+from agent.nodes.care_suffix import route_after_care_suffix
 from agent.nodes.emotion_detect import route_after_emotion
-from agent.nodes.faq_match import route_after_faq
 from agent.nodes.intent_route import route_after_intent
 from agent.nodes.quality_check import route_after_quality
+from agent.nodes.retrieve import route_after_retrieve
 from agent.state import AgentState
 from config.settings import settings
 from observability.tracing import get_langgraph_callbacks
@@ -79,17 +86,17 @@ def build_graph():
     graph = StateGraph(AgentState)
 
     # ===== 添加全部 11 个节点 =====
-    graph.add_node("emotion_detect", emotion_detect)     # 情绪检测（每轮必经）
-    graph.add_node("report", report)                     # 高危上报（写库 + 邮件）
-    graph.add_node("care_response", care_response)       # 高危关怀回复
-    graph.add_node("intent_route", intent_route)         # 意图分类 + Query 改写
-    graph.add_node("retrieve", retrieve)                 # 简单问答：单次混合检索
+    graph.add_node("emotion_detect", emotion_detect)  # 情绪检测（每轮必经）
+    graph.add_node("report", report)  # 高危上报（写库 + 邮件）
+    graph.add_node("care_response", care_response)  # 高危关怀回复（固定中文）
+    graph.add_node("intent_route", intent_route)  # 意图分类 + Query 改写 + 语言判定
+    graph.add_node("retrieve", retrieve)  # 检索入口：FAQ 预查 + 混合检索
     graph.add_node("plan_and_retrieve", plan_and_retrieve)  # 复杂查询：拆解检索
-    graph.add_node("faq_match", faq_match)               # FAQ 高置信度匹配
     graph.add_node("chitchat_response", chitchat_response)  # 闲聊越界兜底
-    graph.add_node("generate", generate)                 # 基于上下文生成回答
-    graph.add_node("quality_check", quality_check)      # 在线质量评估
-    graph.add_node("memory_write", memory_write)         # 长期记忆写入
+    graph.add_node("generate", generate)  # 基于上下文生成回答
+    graph.add_node("quality_check", quality_check)  # 在线质量评估
+    graph.add_node("care_suffix", care_suffix)  # 分级关怀后缀（正常输出收尾）
+    graph.add_node("memory_write", memory_write)  # 长期记忆写入
 
     # ===== 入口：先做情绪检测（安全优先于一切问答逻辑）=====
     graph.add_edge(START, "emotion_detect")
@@ -104,37 +111,41 @@ def build_graph():
     graph.add_edge("report", "care_response")
     graph.add_edge("care_response", END)
 
-    # 意图分流：四条处理分支
+    # 意图分流：三条处理分支（简单问答与 FAQ 合流到 retrieve）
     graph.add_conditional_edges(
         "intent_route", route_after_intent,
         {
             "retrieve": "retrieve",
             "plan_and_retrieve": "plan_and_retrieve",
-            "faq_match": "faq_match",
             "chitchat_response": "chitchat_response",
         },
     )
 
-    # 三条检索分支汇入生成节点
-    graph.add_edge("retrieve", "generate")
-    graph.add_edge("plan_and_retrieve", "generate")
-
-    # FAQ 分支：命中标准答案直接输出（跳过生成与质检），未命中走生成
+    # 检索分流：FAQ 预查命中 → 关怀后缀直返；未命中 → 生成流程
     graph.add_conditional_edges(
-        "faq_match", route_after_faq,
-        {"memory_write": "memory_write", "generate": "generate"},
+        "retrieve", route_after_retrieve,
+        {"care_suffix": "care_suffix", "generate": "generate"},
     )
 
-    # 闲聊越界：直接兜底回复结束（不检索不生成）
-    graph.add_edge("chitchat_response", END)
+    # 复杂查询分支汇入生成节点
+    graph.add_edge("plan_and_retrieve", "generate")
+
+    # 闲聊兜底同样经过关怀后缀（轻度/中度负面情绪的闲聊用户也获得分级关怀）
+    graph.add_edge("chitchat_response", "care_suffix")
 
     # 生成 → 在线质量评估
     graph.add_edge("generate", "quality_check")
 
-    # 质量分流：合格写记忆收尾；不合格回退检索重试（受 retry_count 上限保护）
+    # 质量分流：合格走关怀后缀收尾；不合格回退检索重试（受 retry_count 上限保护）
     graph.add_conditional_edges(
         "quality_check", route_after_quality,
-        {"memory_write": "memory_write", "retrieve": "retrieve"},
+        {"care_suffix": "care_suffix", "retrieve": "retrieve"},
+    )
+
+    # 关怀后缀分流：闲聊不写记忆直接结束，其余写入长期记忆
+    graph.add_conditional_edges(
+        "care_suffix", route_after_care_suffix,
+        {END: END, "memory_write": "memory_write"},
     )
 
     # 记忆写入 → 结束
@@ -179,8 +190,8 @@ def invoke(user_input: str, user_id: str = "anonymous",
 
     config = {
         "configurable": {"thread_id": session_id},
-        "recursion_limit": settings.RECURSION_LIMIT,   # 递归上限，兜底防死循环
-        "callbacks": get_langgraph_callbacks(),        # Langfuse 启用时注入全链路追踪
+        "recursion_limit": settings.RECURSION_LIMIT,  # 递归上限，兜底防死循环
+        "callbacks": get_langgraph_callbacks(),  # Langfuse 启用时注入全链路追踪
     }
 
     return get_app().invoke(initial_state, config)
