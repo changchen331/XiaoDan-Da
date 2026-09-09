@@ -88,7 +88,7 @@ def test_chunker_notice_by_title() -> None:
 def test_chunker_manual_splits_long_text() -> None:
     """手册切分：长文本被递归切为多个 chunk 且带重叠。"""
     long_text = "\n\n".join(f"第{i}段落内容。" + "课程设置的详细说明。" * 30
-                          for i in range(20))
+                            for i in range(20))
     chunks = chunk_by_type(long_text, "手册")
     assert len(chunks) > 1
     assert all(chunk["metadata"]["doc_type"] == "手册" for chunk in chunks)

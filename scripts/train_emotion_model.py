@@ -131,7 +131,7 @@ def oversample_high_risk(texts: list, labels: list) -> tuple:
     high_risk_pairs = [pair for pair in pairs if pair[1] == high_risk_id]
 
     oversampled = pairs + high_risk_pairs * (HIGH_RISK_OVERSAMPLE - 1)
-    random.shuffle(oversampled)   # 打乱防止 batch 内类别聚集
+    random.shuffle(oversampled)  # 打乱防止 batch 内类别聚集
     return [text for text, _ in oversampled], [label for _, label in oversampled]
 
 
@@ -191,7 +191,7 @@ def train(train_path: str, val_path: str | None) -> None:
     model = AutoModelForSequenceClassification.from_pretrained(
         BASE_MODEL_NAME,
         num_labels=len(settings.EMOTION_LABELS),
-        id2label=id2label,   # 标签映射写入 config.json，推理端零额外约定
+        id2label=id2label,  # 标签映射写入 config.json，推理端零额外约定
         label2id=label2id,
     )
 
@@ -213,7 +213,7 @@ def train(train_path: str, val_path: str | None) -> None:
         eval_dataset=val_dataset,
         args=TrainingArguments(
             output_dir=output_dir,
-            learning_rate=2e-5,             # 全量微调的标准学习率
+            learning_rate=2e-5,  # 全量微调的标准学习率
             per_device_train_batch_size=32,
             per_device_eval_batch_size=64,
             num_train_epochs=5,

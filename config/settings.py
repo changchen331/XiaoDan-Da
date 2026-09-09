@@ -25,7 +25,7 @@ class Settings:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    DEEPSEEK_TIMEOUT: int = int(os.getenv("DEEPSEEK_TIMEOUT", "30"))       # 生成环节 30 秒超时
+    DEEPSEEK_TIMEOUT: int = int(os.getenv("DEEPSEEK_TIMEOUT", "30"))  # 生成环节 30 秒超时
 
     # 轻量任务模型（Qwen2.5-14B）：意图路由 / 质量评估 / Query 改写 / 摘要。
     # base_url 可指向本地 vLLM，也可指向任意 OpenAI 兼容的云端端点（如 SiliconFlow），
@@ -33,13 +33,13 @@ class Settings:
     LOCAL_LLM_BASE_URL: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8000/v1")
     LOCAL_LLM_API_KEY: str = os.getenv("LOCAL_LLM_API_KEY", "dummy")
     LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
-    LOCAL_LLM_TIMEOUT: int = int(os.getenv("LOCAL_LLM_TIMEOUT", "15"))     # 轻量任务 15 秒超时
+    LOCAL_LLM_TIMEOUT: int = int(os.getenv("LOCAL_LLM_TIMEOUT", "15"))  # 轻量任务 15 秒超时
 
     # ==================== 模块一：知识库 ====================
 
     # Milvus 向量数据库
     MILVUS_URI: str = os.getenv("MILVUS_URI", "http://localhost:19530")
-    MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "xiaodan_kb")        # 通用知识库
+    MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "xiaodan_kb")  # 通用知识库
     MILVUS_FAQ_COLLECTION: str = os.getenv("MILVUS_FAQ_COLLECTION", "xiaodan_faq")  # FAQ 专用索引
 
     # BGE-M3 稠密向量维度（由模型结构决定，BGE-M3 输出固定 1024 维）
@@ -59,9 +59,9 @@ class Settings:
 
     # 微调后的 XLM-RoBERTa 情绪分类模型存放路径（由 scripts/train_emotion_model.py 产出）
     EMOTION_MODEL_PATH: str = os.getenv("EMOTION_MODEL_PATH", "models/emotion-xlmr")
-    EMOTION_LABELS: tuple = ("正常", "轻度困扰", "中度困扰", "高危")   # 标签顺序即模型类别 id 顺序
+    EMOTION_LABELS: tuple = ("正常", "轻度困扰", "中度困扰", "高危")  # 标签顺序即模型类别 id 顺序
     HIGH_RISK_PROB_THRESHOLD: float = float(os.getenv("HIGH_RISK_PROB_THRESHOLD", "0.5"))
-    ESCALATION_ROUNDS: int = int(os.getenv("ESCALATION_ROUNDS", "3"))   # 连续 N 轮负面 → 升级一级
+    ESCALATION_ROUNDS: int = int(os.getenv("ESCALATION_ROUNDS", "3"))  # 连续 N 轮负面 → 升级一级
 
     # ==================== 模块二：高危上报 ====================
 
@@ -90,7 +90,7 @@ class Settings:
 
     # ==================== 模块三：流程控制 ====================
 
-    MAX_RETRY: int = int(os.getenv("MAX_RETRY", "2"))           # 质量评估不合格最多重试 2 次
+    MAX_RETRY: int = int(os.getenv("MAX_RETRY", "2"))  # 质量评估不合格最多重试 2 次
     RECURSION_LIMIT: int = int(os.getenv("RECURSION_LIMIT", "25"))  # LangGraph 递归上限，兜底防死循环
     HISTORY_MAX_ROUNDS: int = int(os.getenv("HISTORY_MAX_ROUNDS", "10"))  # 生成时携带的最大历史轮数
 

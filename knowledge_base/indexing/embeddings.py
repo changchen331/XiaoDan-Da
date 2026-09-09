@@ -38,16 +38,16 @@ class BGEM3Embedder:
         outputs = self.model.encode(
             texts,
             batch_size=8,
-            max_length=1024,             # 覆盖 768 token 的 chunk 上限后仍有余量
+            max_length=1024,  # 覆盖 768 token 的 chunk 上限后仍有余量
             return_dense=True,
             return_sparse=True,
-            return_colbert_vecs=False,   # 多向量（ColBERT）检索路线暂不启用
+            return_colbert_vecs=False,  # 多向量（ColBERT）检索路线暂不启用
         )
 
         result: list = []
         for i in range(len(texts)):
-            dense = outputs["dense_vecs"][i].tolist()                    # 1024 维稠密向量
-            sparse = _to_milvus_sparse(outputs["lexical_weights"][i])     # {token_id: 权重} 稀疏向量
+            dense = outputs["dense_vecs"][i].tolist()  # 1024 维稠密向量
+            sparse = _to_milvus_sparse(outputs["lexical_weights"][i])  # {token_id: 权重} 稀疏向量
             result.append({"dense": dense, "sparse": sparse})
         return result
 

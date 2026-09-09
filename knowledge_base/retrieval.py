@@ -10,7 +10,7 @@
 RRF 融合公式：score(d) = Σ 1/(k + rank_i(d))，k=60（标准值），
 不依赖两路得分的绝对量纲，天然适合 dense/sparse 异构分数融合。
 """
-from pymilvus import AnnSearchRequest, MilvusClient, RRFFusion
+from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker
 
 from config.settings import settings
 from knowledge_base.indexing.embeddings import get_embedder
@@ -62,7 +62,7 @@ class RetrievalService:
         results = self.client.hybrid_search(
             collection_name=settings.MILVUS_COLLECTION,
             reqs=[dense_request, sparse_request],
-            ranker=RRFFusion(k=60),   # k=60 为 RRF 论文与工业实践的标准平滑常数
+            ranker=RRFRanker(k=60),  # k=60 为 RRF 论文与工业实践的标准平滑常数
             limit=limit,
             output_fields=["text", "metadata"],
         )
@@ -99,7 +99,7 @@ class RetrievalService:
             reranked.append({
                 "text": candidate["text"],
                 "metadata": candidate["metadata"],
-                "score": float(score),   # 覆盖召回分数，保留重排分数
+                "score": float(score),  # 覆盖召回分数，保留重排分数
             })
         return reranked
 

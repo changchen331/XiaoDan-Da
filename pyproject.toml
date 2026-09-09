@@ -35,6 +35,7 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
     "psycopg2-binary>=2.9.0",                 # PostgreSQL 驱动（记忆 / 上报 / Checkpointer）
+    "pydantic>=2.13.5",
 ]
 
 # 开发依赖（uv sync 默认安装，Docker 镜像构建用 --no-dev 跳过）

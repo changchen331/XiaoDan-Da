@@ -75,6 +75,8 @@ def _get_qwen_client() -> OpenAI:
 def chat_deepseek(prompt: str, system: str | None = None, temperature: float = 0.3) -> str:
     """DeepSeek 调用，失败时自动降级到 Qwen 端点。
 
+    :param prompt: Prompt
+    :param system: System Prompt
     :param temperature: 问答场景用 0.3（准确性优先）；关怀回复可用 0.7（表达更自然）
     """
     messages = _build_messages(prompt, system)
@@ -91,6 +93,8 @@ def chat_deepseek(prompt: str, system: str | None = None, temperature: float = 0
 def chat_qwen(prompt: str, system: str | None = None, temperature: float = 0.1) -> str:
     """轻量任务模型调用，失败时自动降级到 DeepSeek。
 
+    :param prompt: Prompt
+    :param system: System Prompt
     :param temperature: 分类 / 评估类任务统一用低温度（0.1）保证确定性
     """
     messages = _build_messages(prompt, system)

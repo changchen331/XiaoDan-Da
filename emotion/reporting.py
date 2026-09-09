@@ -21,16 +21,34 @@ from config.settings import settings
 
 # 高危上报表 DDL：独立于 user_memory 与 Checkpointer 内部表
 ALERT_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS emotion_alerts (
-    id            SERIAL PRIMARY KEY,
-    user_id       TEXT        NOT NULL,          -- 内部 ID（非真实姓名/学号）
-    detected_at   TIMESTAMPTZ NOT NULL,          -- 触发时间
-    emotion_level TEXT        NOT NULL,           -- 触发时的情绪级别
-    confidence    REAL        NOT NULL,           -- 检测置信度
-    trigger_summary TEXT,                         -- 触发内容摘要（前 100 字）
-    recent_context JSONB                          -- 最近 3 轮对话上下文
-)
-"""
+                  CREATE TABLE IF NOT EXISTS emotion_alerts
+                  (
+                      id
+                      SERIAL
+                      PRIMARY
+                      KEY,
+                      user_id
+                      TEXT
+                      NOT
+                      NULL, -- 内部 ID（非真实姓名/学号）
+                      detected_at
+                      TIMESTAMPTZ
+                      NOT
+                      NULL, -- 触发时间
+                      emotion_level
+                      TEXT
+                      NOT
+                      NULL, -- 触发时的情绪级别
+                      confidence
+                      REAL
+                      NOT
+                      NULL, -- 检测置信度
+                      trigger_summary
+                      TEXT, -- 触发内容摘要（前 100 字）
+                      recent_context
+                      JSONB -- 最近 3 轮对话上下文
+                  ) \
+                  """
 
 
 def build_report_record(user_id: str, trigger_text: str,
@@ -50,7 +68,7 @@ def build_report_record(user_id: str, trigger_text: str,
         "detected_at": datetime.now().isoformat(),
         "emotion_level": emotion_level,
         "confidence": emotion_confidence,
-        "trigger_text_summary": trigger_text[:100],   # 摘要截断：数据最小化
+        "trigger_text_summary": trigger_text[:100],  # 摘要截断：数据最小化
         "recent_context": recent_context[-3:],
     }
 
@@ -81,8 +99,8 @@ def _insert_alert(record: dict) -> None:
             cursor.execute(
                 """
                 INSERT INTO emotion_alerts
-                    (user_id, detected_at, emotion_level, confidence,
-                     trigger_summary, recent_context)
+                (user_id, detected_at, emotion_level, confidence,
+                 trigger_summary, recent_context)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (

@@ -36,7 +36,7 @@ import os
 import re
 import sys
 
-from config.settings import settings, get_current_semester
+from config.settings import get_current_semester
 from knowledge_base.faq import get_faq_index
 from knowledge_base.indexing.embeddings import get_embedder
 from knowledge_base.indexing.milvus_client import (
@@ -156,7 +156,7 @@ def _parse_notice_file(file_path: str) -> tuple:
         if matched:
             meta[matched.group(1)] = matched.group(2).strip()
         elif line.strip() == "" and meta:
-            body_start = i + 1   # 元数据头部后的首个空行是正文起点
+            body_start = i + 1  # 元数据头部后的首个空行是正文起点
             break
 
     body = "\n".join(lines[body_start:])

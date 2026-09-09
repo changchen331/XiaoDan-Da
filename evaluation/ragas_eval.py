@@ -104,10 +104,10 @@ def run_eval(raw_eval_data: dict) -> object:
     results = evaluate(
         dataset=eval_dataset,
         metrics=[
-            faithfulness,        # 忠实度（最重要：编造检测）
-            answer_relevancy,    # 答案相关性
-            context_precision,   # 上下文精确率（检索排序质量）
-            context_recall,      # 上下文召回率（检索覆盖度）
+            faithfulness,  # 忠实度（最重要：编造检测）
+            answer_relevancy,  # 答案相关性
+            context_precision,  # 上下文精确率（检索排序质量）
+            context_recall,  # 上下文召回率（检索覆盖度）
             answer_correctness,  # 端到端正确性（与标准答案比对）
         ],
         llm=build_judge(),
@@ -145,7 +145,7 @@ def run_end_to_end_eval(eval_data_path: str) -> None:
         result = invoke(
             user_input=qa["question"],
             user_id="eval_user",
-            session_id=f"eval_{qa.get('id', id(qa))}",   # 独立会话避免互相污染记忆
+            session_id=f"eval_{qa.get('id', id(qa))}",  # 独立会话避免互相污染记忆
             user_profile=qa.get("user_profile", {"role": "本科生"}),
         )
         # 检索上下文从 RetrievedChunk 字典列表中提取纯文本

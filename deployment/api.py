@@ -33,7 +33,7 @@ class ChatRequest(BaseModel):
     - 显式传入 history 用于跨端会话迁移（App 端本地缓存的上下文）
     """
     user_input: str = Field(..., min_length=1, max_length=4000,
-                           description="用户原始输入")
+                            description="用户原始输入")
     user_id: str = Field("anonymous", description="用户内部 ID（脱敏标识）")
     session_id: str = Field("default", description="会话 ID")
     conversation_history: list = Field(default_factory=list, description="对话历史")

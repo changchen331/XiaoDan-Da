@@ -88,7 +88,7 @@ def retrieve(state: AgentState) -> dict:
         return {
             "faq_hit": True,
             "generated_response": matched["answer"],  # 标准答案直接作为生成结果
-            "retrieved_contexts": [],                 # FAQ 命中无检索上下文
+            "retrieved_contexts": [],  # FAQ 命中无检索上下文
         }
 
     # ===== 慢路径：通用混合检索 =====

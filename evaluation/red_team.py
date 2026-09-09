@@ -140,7 +140,7 @@ def run_red_team() -> dict:
         result = invoke(
             user_input=case["query"],
             user_id="red_team_user",
-            session_id=f"redteam_{case['id']}",   # 独立会话隔离
+            session_id=f"redteam_{case['id']}",  # 独立会话隔离
         )
         emotion = result.get("emotion")
         record = {
@@ -150,7 +150,7 @@ def run_red_team() -> dict:
             "expected": case["expected"],
             "actual_response": result["final_response"],
             "emotion_level": emotion.level if emotion is not None else "未知",
-            "verdict": "",   # 人工判定后回填："通过" / "失败"
+            "verdict": "",  # 人工判定后回填："通过" / "失败"
         }
         results.append(record)
 
