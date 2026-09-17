@@ -37,9 +37,10 @@ models/*
 logs/
 *.log
 rag_eval_report.csv
-outputs/                  # Trainer 训练中间产物（最优权重另存 models/）
+outputs/                  # Trainer 训练中间产物 (最优权重另存 models/)
 .pytest_cache/
-hf_cache/                 # HuggingFace 模型下载缓存（Docker 挂载目录）
+hf_cache/                 # HuggingFace 模型下载缓存 (Docker 挂载目录)
+.vscode/
 
 # ===== 中间件本地存储 =====
 volumes/
