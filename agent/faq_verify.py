@@ -11,6 +11,7 @@
 0.85 阈值本身的基线判别能力——错误命中是低概率事件，而"FAQ 永远
 无法命中"是确定性故障，两害相权取其轻。
 """
+
 from agent.llm_clients import chat_qwen_json, parse_json_response
 
 VERIFY_PROMPT = """请校验一条 FAQ 匹配结果是否可以安全地直接返回给用户，检查两个维度：
@@ -28,7 +29,9 @@ FAQ 标准答案：{answer}
 {{"answer_match": true, "language_match": true}}"""
 
 
-def verify_faq_match(query: str, question: str, answer: str, response_language: str) -> bool:
+def verify_faq_match(
+    query: str, question: str, answer: str, response_language: str
+) -> bool:
     """校验 FAQ 命中结果（答案适配 + 语言匹配），两维全过才放行。
 
     :param query: 用户改写后的检索 query
@@ -39,12 +42,14 @@ def verify_faq_match(query: str, question: str, answer: str, response_language: 
         校验调用自身失败时返回 True（信任阈值，见模块说明）
     """
     try:
-        raw = chat_qwen_json(VERIFY_PROMPT.format(
-            query=query,
-            language=response_language,
-            question=question,
-            answer=answer,
-        ))
+        raw = chat_qwen_json(
+            VERIFY_PROMPT.format(
+                query=query,
+                language=response_language,
+                question=question,
+                answer=answer,
+            )
+        )
         result = parse_json_response(raw)
         return bool(result["answer_match"]) and bool(result["language_match"])
     except (ValueError, KeyError, TypeError) as verify_error:

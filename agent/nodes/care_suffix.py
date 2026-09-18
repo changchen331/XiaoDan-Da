@@ -13,6 +13,7 @@
 高危路径（report → care_response → END）不经过本节点：
 高危是整段替换式干预而非附加，且关怀回复面向后台固定中文。
 """
+
 from langgraph.graph import END
 
 from agent.llm_clients import chat_qwen
@@ -49,8 +50,9 @@ MODERATE_SUFFIX_PROMPT = """请为下面的校园问答回复追加关怀与求�
 
 # 降级模板：LLM 生成失败时兜底（中英两套，按用户语言选择）
 _FALLBACK_SUFFIX_ZH = "听起来你最近可能有些压力，注意休息、照顾好自己。\n\n{care_info}"
-_FALLBACK_SUFFIX_EN = ("Sounds like things may feel heavy lately. "
-                       "Take care of yourself.\n\n{care_info}")
+_FALLBACK_SUFFIX_EN = (
+    "Sounds like things may feel heavy lately. " "Take care of yourself.\n\n{care_info}"
+)
 
 
 def _fallback_suffix(level: str, response_language: str) -> str:
@@ -62,49 +64,76 @@ def _fallback_suffix(level: str, response_language: str) -> str:
     """
     if level == "轻度困扰":
         if response_language == "English":
-            return "Sounds like things may feel a bit heavy lately. Take care of yourself."
+            return (
+                "Sounds like things may feel a bit heavy lately. Take care of yourself."
+            )
         return "听起来你最近可能有些压力，注意休息、照顾好自己。"
 
     # 中度困扰：关怀 + 渠道信息（渠道语言跟随配置而非用户偏好，
     # 避免中文渠道信息被强行翻译；若用户为英文则附英文版渠道）
-    care_info = (settings.CARE_CENTER_INFO_ZH if response_language != "English"
-                 else settings.CARE_CENTER_INFO_EN)
-    template = _FALLBACK_SUFFIX_ZH if response_language != "English" else _FALLBACK_SUFFIX_EN
+    care_info = (
+        settings.CARE_CENTER_INFO_ZH
+        if response_language != "English"
+        else settings.CARE_CENTER_INFO_EN
+    )
+    template = (
+        _FALLBACK_SUFFIX_ZH if response_language != "English" else _FALLBACK_SUFFIX_EN
+    )
     return template.format(care_info=care_info)
 
 
 def care_suffix(state: AgentState) -> dict:
-    """按情绪分级为回复附加关怀内容，产出 final_response。
+    """按情绪分级为回复附加关怀内容，产出 final_response 并追加本轮对话历史。
 
     - 正常 / 无情绪结果：透传 generated_response
     - 轻度 / 中度困扰：LLM 生成自然后缀，失败时降级固定模板
+
+    本节点是非高危路径的**统一收尾处**（正常问答、FAQ 快路径、闲聊都汇聚于此），
+    因此把「追加 conversation_history」放在这里，一次覆盖全部出口。
     """
     emotion = state.get("emotion")
     response = state["generated_response"]
     response_language = state.get("response_language", "中文")
 
+    suffix = ""
     # 正常（或情绪缺失的异常兜底）：不附加任何内容，避免打扰
-    if emotion is None or emotion.level in ("正常", "高危"):
-        return {"final_response": response}
+    if emotion is not None and emotion.level not in ("正常", "高危"):
+        level = emotion.level
+        language_name = "英文" if response_language == "English" else "中文"
+        try:
+            if level == "轻度困扰":
+                suffix = chat_qwen(
+                    MILD_SUFFIX_PROMPT.format(language=language_name, response=response)
+                )
+            else:  # 中度困扰
+                care_info = (
+                    settings.CARE_CENTER_INFO_ZH
+                    if response_language != "English"
+                    else settings.CARE_CENTER_INFO_EN
+                )
+                suffix = chat_qwen(
+                    MODERATE_SUFFIX_PROMPT.format(
+                        language=language_name, response=response, care_info=care_info
+                    )
+                )
+        except Exception as suffix_error:
+            # 降级链：LLM 后缀生成失败不阻断回复输出，落回固定模板
+            print(f"[care_suffix] 后缀生成失败，降级固定模板: {suffix_error}")
+            suffix = _fallback_suffix(level, response_language)
 
-    level = emotion.level
-    language_name = "英文" if response_language == "English" else "中文"
+    final_response = f"{response}\n\n{suffix}" if suffix else response
 
-    try:
-        if level == "轻度困扰":
-            suffix = chat_qwen(MILD_SUFFIX_PROMPT.format(
-                language=language_name, response=response))
-        else:  # 中度困扰
-            care_info = (settings.CARE_CENTER_INFO_ZH if response_language != "English"
-                         else settings.CARE_CENTER_INFO_EN)
-            suffix = chat_qwen(MODERATE_SUFFIX_PROMPT.format(
-                language=language_name, response=response, care_info=care_info))
-    except Exception as suffix_error:
-        # 降级链：LLM 后缀生成失败不阻断回复输出，落回固定模板
-        print(f"[care_suffix] 后缀生成失败，降级固定模板: {suffix_error}")
-        suffix = _fallback_suffix(level, response_language)
+    # 追加本轮问答到短期记忆：该字段靠 Checkpointer 跨轮保留（invoke 不会重置它），
+    # 供下一轮的规则引擎（多轮累积升级）与生成节点（上下文）读取。
+    # 上限取 HISTORY_MAX_ROUNDS 轮（每轮 user + assistant 共两条），防止状态无限膨胀。
+    history = list(state.get("conversation_history", []))
+    history.append({"role": "user", "content": state["user_input"]})
+    history.append({"role": "assistant", "content": final_response})
 
-    return {"final_response": f"{response}\n\n{suffix}"}
+    return {
+        "final_response": final_response,
+        "conversation_history": history[-settings.HISTORY_MAX_ROUNDS * 2 :],
+    }
 
 
 def route_after_care_suffix(state: AgentState) -> str:

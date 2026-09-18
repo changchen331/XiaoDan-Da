@@ -8,9 +8,13 @@
 性能设计：模型加载耗时且占显存，全进程仅加载一次（模块级单例），
 入库脚本与检索服务共享同一实例。
 """
-from FlagEmbedding import BGEM3FlagModel
 
 from config.settings import settings
+
+# 注意导入顺序：必须先导入 config.settings —— 它会执行 load_dotenv() 把 .env 写入
+# 进程环境变量；而 huggingface_hub 在**导入时**读取 HF_ENDPOINT 并固化，
+# 若 FlagEmbedding 先被导入，HF_ENDPOINT 尚未生效，国内镜像配置会失效
+from FlagEmbedding import BGEM3FlagModel
 
 # 进程级单例：避免重复加载 2GB+ 的 BGE-M3 模型
 _embedder: "BGEM3Embedder | None" = None
@@ -47,7 +51,9 @@ class BGEM3Embedder:
         result: list = []
         for i in range(len(texts)):
             dense = outputs["dense_vecs"][i].tolist()  # 1024 维稠密向量
-            sparse = _to_milvus_sparse(outputs["lexical_weights"][i])  # {token_id: 权重} 稀疏向量
+            sparse = _to_milvus_sparse(
+                outputs["lexical_weights"][i]
+            )  # {token_id: 权重} 稀疏向量
             result.append({"dense": dense, "sparse": sparse})
         return result
 
@@ -58,7 +64,9 @@ def _to_milvus_sparse(lexical_weights: dict) -> dict:
     BGE-M3 稀疏输出为 {token_id: weight}，Milvus 要求键为整型、值为浮点型，
     此处仅做类型规整，不改变权重分布。
     """
-    return {int(token_id): float(weight) for token_id, weight in lexical_weights.items()}
+    return {
+        int(token_id): float(weight) for token_id, weight in lexical_weights.items()
+    }
 
 
 def get_embedder() -> BGEM3Embedder:

@@ -12,6 +12,7 @@
 追踪数据用于：Bad Case 回溯（还原某次糟糕回答的完整决策链）、
 性能分析（定位延迟瓶颈节点）、每周采样审计。
 """
+
 from config.settings import settings
 
 
@@ -25,6 +26,7 @@ def get_langgraph_callbacks() -> list:
     try:
         # 延迟导入：未安装 langfuse 时主流程完全不受影响
         from langfuse.langchain import CallbackHandler
+
         return [CallbackHandler()]
     except ImportError as import_error:
         print(f"[tracing] langfuse 依赖不可用，跳过图结构追踪: {import_error}")
@@ -46,6 +48,7 @@ def observe_llm(func):
         return func
     try:
         from langfuse import observe
+
         return observe()(func)
     except ImportError:
         # 依赖缺失时静默透传：追踪是可观测性增强，绝不能阻塞业务调用

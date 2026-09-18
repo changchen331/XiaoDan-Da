@@ -15,11 +15,17 @@ dependencies = [
     "openai>=1.40.0",                         # DeepSeek / vLLM 均兼容 OpenAI 协议
     "python-dotenv>=1.0.0",
     # ===== 模块一：知识库引擎 =====
-    "pymilvus>=2.4.0",                        # Milvus 客户端（hybrid_search + RRF）
-    "unstructured>=0.15.0",                   # PDF/HTML/DOCX 统一解析
+    # 必须限制上界：pymilvus 3.x 的 create_collection 要求 index_params 传 IndexParams
+    # 对象（不再接受 dict），且客户端主版本须与 Milvus 服务端（v2.4.x）对齐
+    "pymilvus>=2.4.0,<2.5",                   # Milvus 客户端（hybrid_search + RRF）
+    # extras 必须覆盖代码实际处理的格式：基础包不含任何解析器，
+    # 缺 pdf/docx/doc 时 partition_pdf()/partition_docx() 会直接 ImportError
+    "unstructured[pdf,docx,doc]>=0.15.0",     # PDF/HTML/DOCX/DOC 统一解析
     "flagembedding>=1.2.0",                   # BGE-M3（双路向量）+ BGE-Reranker-v2-M3
     "requests>=2.31.0",                       # 官网爬虫
     "beautifulsoup4>=4.12.0",                 # 官网爬虫 HTML 解析
+    "playwright>=1.63.0",                     # 官网爬虫 JS 渲染（教务处等 SPA 站点）
+    # 注意：首次使用需另执行 playwright install chromium 下载浏览器内核
     # ===== 模块二：情绪检测引擎 =====
     "torch>=2.1.0",
     "transformers>=4.40.0",                   # XLM-RoBERTa 微调与推理
@@ -36,6 +42,11 @@ dependencies = [
     "uvicorn>=0.29.0",
     "psycopg2-binary>=2.9.0",                 # PostgreSQL 驱动（记忆 / 上报 / Checkpointer）
     "pydantic>=2.13.5",
+    # 显式声明并限制上界：pymilvus 2.4.x 在导入时使用 pkg_resources
+    # （from pkg_resources import get_distribution），而该模块在 setuptools 81 中
+    # 已被移除，且 uv 创建的虚拟环境默认不含 setuptools，不声明会直接 ImportError
+    "setuptools<81",
+    "psycopg[binary]>=3.2",
 ]
 
 # 开发依赖（uv sync 默认安装，Docker 镜像构建用 --no-dev 跳过）

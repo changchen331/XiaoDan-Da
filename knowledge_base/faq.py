@@ -13,9 +13,14 @@ FAQ 专用索引让此类问题一步命中标准答案，兼顾响应速度与�
 匹配策略：问题向量 top1 相似度 > 0.85（阈值可配）→ 直接返回标准答案，
 不经过 LLM 生成；未命中自动降级到通用 RAG 流程。
 """
+
 from config.settings import settings
 from knowledge_base.indexing.embeddings import get_embedder
-from knowledge_base.indexing.milvus_client import get_milvus_client, insert_faq_rows
+from knowledge_base.indexing.milvus_client import (
+    ensure_collection_loaded,
+    get_milvus_client,
+    insert_faq_rows,
+)
 
 
 class FAQIndex:
@@ -24,6 +29,8 @@ class FAQIndex:
     def __init__(self) -> None:
         self.client = get_milvus_client()
         self.embedder = get_embedder()
+        # 同 RetrievalService：检索前置条件，服务初始化时统一保证
+        ensure_collection_loaded(self.client, settings.MILVUS_FAQ_COLLECTION)
 
     def build(self, faq_entries: list) -> int:
         """从结构化 FAQ 数据构建独立索引。
@@ -47,14 +54,16 @@ class FAQIndex:
         cursor = 0
         for entry in faq_entries:
             question_count = 1 + len(entry.get("similar_questions", []))
-            for vec in vectors[cursor:cursor + question_count]:
-                rows.append({
-                    "question": entry["question"],
-                    "answer": entry["answer"],
-                    "similar_questions": entry.get("similar_questions", []),
-                    "tags": entry.get("tags", []),
-                    "question_vec": vec["dense"],
-                })
+            for vec in vectors[cursor : cursor + question_count]:
+                rows.append(
+                    {
+                        "question": entry["question"],
+                        "answer": entry["answer"],
+                        "similar_questions": entry.get("similar_questions", []),
+                        "tags": entry.get("tags", []),
+                        "question_vec": vec["dense"],
+                    }
+                )
             cursor += question_count
 
         insert_faq_rows(rows)

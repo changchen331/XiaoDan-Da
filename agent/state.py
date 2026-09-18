@@ -5,6 +5,7 @@
 - 每个节点只读自己需要的字段、只写自己产出的字段，节点之间通过 State 解耦
 - 全部字段 total=False：构造初始 State 时允许只传部分键（LangGraph 增量合并）
 """
+
 from typing import Literal, Optional, TypedDict
 
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 
 class EmotionResult(BaseModel):
     """情绪检测结果（由模块二产出）。"""
+
     level: Literal["正常", "轻度困扰", "中度困扰", "高危"]
     source: str  # 判定来源："规则引擎" / "分类模型" / "规则+模型融合"
     confidence: float  # 置信度 0-1
@@ -19,6 +21,7 @@ class EmotionResult(BaseModel):
 
 class IntentResult(BaseModel):
     """意图路由结果（由轻量模型产出）。"""
+
     category: Literal["简单问答", "复杂查询", "FAQ", "闲聊越界"]
     confidence: float
     rewritten_query: str  # 改写后的检索 query（口语 → 精准检索语句）
@@ -26,6 +29,7 @@ class IntentResult(BaseModel):
 
 class QualityResult(BaseModel):
     """质量评估结果（由轻量模型产出）。"""
+
     passed: bool
     score: float  # 0-1
     reason: str  # 不合格时的原因描述（合格时为通过理由）
@@ -33,6 +37,7 @@ class QualityResult(BaseModel):
 
 class RetrievedChunk(BaseModel):
     """单个检索结果：文本 + 元数据 + 相关性得分。"""
+
     text: str
     metadata: dict
     score: float
@@ -40,6 +45,7 @@ class RetrievedChunk(BaseModel):
 
 class AgentState(TypedDict, total=False):
     """LangGraph 全局状态。"""
+
     # ===== 输入 =====
     user_input: str  # 用户原始输入
     user_id: str  # 用户 ID（脱敏后的内部 ID，非真实姓名/学号）

@@ -10,6 +10,7 @@
 可靠性设计：写库失败不阻断关怀回复流程（高危场景下用户优先得到回应，
 上报落库失败时打印错误日志，由人工核对补录）。
 """
+
 import json
 import smtplib
 from datetime import datetime
@@ -51,9 +52,13 @@ ALERT_TABLE_DDL = """
                   """
 
 
-def build_report_record(user_id: str, trigger_text: str,
-                        emotion_level: str, emotion_confidence: float,
-                        recent_context: list) -> dict:
+def build_report_record(
+    user_id: str,
+    trigger_text: str,
+    emotion_level: str,
+    emotion_confidence: float,
+    recent_context: list,
+) -> dict:
     """生成脱敏后的上报记录。
 
     :param user_id: 用户内部 ID
@@ -112,8 +117,10 @@ def _insert_alert(record: dict) -> None:
                     json.dumps(record["recent_context"], ensure_ascii=False),
                 ),
             )
-    print(f"[reporting] 高危记录已入库: 用户 {record['user_id']} "
-          f"置信度 {record['confidence']:.2f}")
+    print(
+        f"[reporting] 高危记录已入库: 用户 {record['user_id']} "
+        f"置信度 {record['confidence']:.2f}"
+    )
 
 
 def _send_alert_email(record: dict) -> None:
@@ -138,7 +145,8 @@ def _send_alert_email(record: dict) -> None:
     # 465 端口为 SMTP over SSL（加密连接，符合敏感信息传输要求）
     with smtplib.SMTP_SSL(settings.ALERT_SMTP_HOST, settings.ALERT_SMTP_PORT) as server:
         server.login(settings.ALERT_SENDER, settings.ALERT_SMTP_PASSWORD)
-        server.sendmail(settings.ALERT_SENDER, [settings.ALERT_RECEIVER],
-                        message.as_string())
+        server.sendmail(
+            settings.ALERT_SENDER, [settings.ALERT_RECEIVER], message.as_string()
+        )
 
     print(f"[reporting] 告警邮件已发送至 {settings.ALERT_RECEIVER}")

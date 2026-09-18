@@ -23,6 +23,7 @@
 
 数据脱敏：所有发送给外部裁判 API 的文本先替换手机号 / 学号。
 """
+
 import argparse
 import json
 import re
@@ -79,11 +80,13 @@ def sanitize_dataset(raw_data: dict) -> dict:
 
 def build_judge() -> LangchainLLMWrapper:
     """裁判模型：GPT-4o 快照版，temperature=0。"""
-    return LangchainLLMWrapper(ChatOpenAI(
-        model=settings.JUDGE_MODEL,
-        temperature=0,
-        max_tokens=1024,
-    ))
+    return LangchainLLMWrapper(
+        ChatOpenAI(
+            model=settings.JUDGE_MODEL,
+            temperature=0,
+            max_tokens=1024,
+        )
+    )
 
 
 def build_judge_embeddings() -> LangchainEmbeddingsWrapper:
@@ -118,7 +121,9 @@ def run_eval(raw_eval_data: dict) -> object:
     for metric_name, score in results.items():
         target, diagnosis = TARGETS.get(metric_name, ("-", ""))
         status = "PASS" if score >= target else "FAIL"
-        print(f"  {metric_name:22s}: {score:.4f} (目标 > {target}) [{status}] {diagnosis}")
+        print(
+            f"  {metric_name:22s}: {score:.4f} (目标 > {target}) [{status}] {diagnosis}"
+        )
 
     # 逐条明细导出：Bad Case 定位与回归比对的数据基础
     report_path = "rag_eval_report.csv"
@@ -155,15 +160,20 @@ def run_end_to_end_eval(eval_data_path: str) -> None:
         raw_data["answer"].append(result["final_response"])
         raw_data["contexts"].append(contexts)
         raw_data["ground_truth"].append(qa["reference_answer"])
-        print(f"[ragas_eval] 完成 {len(raw_data['question'])}/{len(eval_qa_pairs)}: {qa['question'][:30]}")
+        print(
+            f"[ragas_eval] 完成 {len(raw_data['question'])}/{len(eval_qa_pairs)}: {qa['question'][:30]}"
+        )
 
     run_eval(raw_data)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="小旦答 RAGAS 端到端评测")
-    parser.add_argument("--data", default="data/eval/rag_eval.json",
-                        help="评测集路径（JSON 数组，含 id/question/reference_answer/user_profile）")
+    parser.add_argument(
+        "--data",
+        default="data/eval/rag_eval.json",
+        help="评测集路径（JSON 数组，含 id/question/reference_answer/user_profile）",
+    )
     args = parser.parse_args()
 
     run_end_to_end_eval(args.data)

@@ -10,11 +10,12 @@
 RRF 融合公式：score(d) = Σ 1/(k + rank_i(d))，k=60（标准值），
 不依赖两路得分的绝对量纲，天然适合 dense/sparse 异构分数融合。
 """
+
 from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker
 
 from config.settings import settings
 from knowledge_base.indexing.embeddings import get_embedder
-from knowledge_base.indexing.milvus_client import get_milvus_client
+from knowledge_base.indexing.milvus_client import ensure_collection_loaded, get_milvus_client
 
 # 进程级单例：Reranker 模型体积大，与 Embedder 一样只加载一次
 _reranker = None
@@ -26,8 +27,13 @@ class RetrievalService:
     def __init__(self) -> None:
         self.client: MilvusClient = get_milvus_client()
         self.embedder = get_embedder()
+        # 检索的前置条件：集合必须已 load 到内存。
+        # 放在服务初始化处统一保证，覆盖「Milvus 服务端重启后集合被卸载」的情况
+        ensure_collection_loaded(self.client, settings.MILVUS_COLLECTION)
 
-    def hybrid_search(self, query: str, filter_expr: str = "", top_k: int | None = None) -> list:
+    def hybrid_search(
+        self, query: str, filter_expr: str = "", top_k: int | None = None
+    ) -> list:
         """混合检索：dense（语义）+ sparse（关键词）两路召回后 RRF 融合。
 
         :param query: 改写后的检索语句
@@ -96,11 +102,13 @@ class RetrievalService:
 
         reranked = []
         for candidate, score in scored[:top_k]:
-            reranked.append({
-                "text": candidate["text"],
-                "metadata": candidate["metadata"],
-                "score": float(score),  # 覆盖召回分数，保留重排分数
-            })
+            reranked.append(
+                {
+                    "text": candidate["text"],
+                    "metadata": candidate["metadata"],
+                    "score": float(score),  # 覆盖召回分数，保留重排分数
+                }
+            )
         return reranked
 
     @staticmethod
@@ -113,11 +121,13 @@ class RetrievalService:
         formatted: list = []
         for hits in raw_results:
             for hit in hits:
-                formatted.append({
-                    "text": hit["entity"]["text"],
-                    "metadata": hit["entity"]["metadata"],
-                    "score": float(hit["distance"]),
-                })
+                formatted.append(
+                    {
+                        "text": hit["entity"]["text"],
+                        "metadata": hit["entity"]["metadata"],
+                        "score": float(hit["distance"]),
+                    }
+                )
         return formatted
 
 

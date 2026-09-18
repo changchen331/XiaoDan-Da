@@ -13,6 +13,7 @@ Docker 环境由 docker-compose 编排启动（见 docker-compose.yml 的 xiaoda
 - user_id 一律使用调用方传入的内部 ID，服务端不采集姓名 / 学号
 - 请求体大小由 FastAPI 默认限制约束，防止超长文本攻击
 """
+
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
@@ -32,17 +33,21 @@ class ChatRequest(BaseModel):
     - 同一 session_id 的请求自动共享 Checkpointer 短期记忆
     - 显式传入 history 用于跨端会话迁移（App 端本地缓存的上下文）
     """
-    user_input: str = Field(..., min_length=1, max_length=4000,
-                            description="用户原始输入")
+
+    user_input: str = Field(
+        ..., min_length=1, max_length=4000, description="用户原始输入"
+    )
     user_id: str = Field("anonymous", description="用户内部 ID（脱敏标识）")
     session_id: str = Field("default", description="会话 ID")
     conversation_history: list = Field(default_factory=list, description="对话历史")
-    user_profile: dict = Field(default_factory=lambda: {"role": "本科生"},
-                               description="用户画像")
+    user_profile: dict = Field(
+        default_factory=lambda: {"role": "本科生"}, description="用户画像"
+    )
 
 
 class ChatResponse(BaseModel):
     """对话响应体：只暴露最终回答与情绪级别，内部流程细节不下发。"""
+
     session_id: str
     final_response: str
     emotion_level: str

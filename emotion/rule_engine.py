@@ -3,13 +3,21 @@
 职责：零延迟拦截最明显的危险信号，确保即使分类模型遇到训练集未覆盖的表达，
 最危险的 case 也绝对不会漏掉。规则命中直接定级，不再经过模型。
 """
+
 import re
 
 from config.settings import settings
 
-# 规则等级常量
-LEVEL_HIGH = "高危"
-LEVEL_MID = "中度"
+# 规则等级常量：**直接取自 settings.EMOTION_LABELS**（情绪四级的唯一声明处，
+# 0=正常 1=轻度困扰 2=中度困扰 3=高危）。
+#
+# 这里不再各自写一份字面量，是为了根治一类缺陷：规则引擎曾把"中度困扰"写成"中度"，
+# 与 agent/state.py 的 EmotionResult 白名单不一致，导致命中中度规则时抛 ValidationError
+# 并使整图崩溃。改成从同一处取值后，两边在构造上就不可能再漂移。
+# 规则引擎不产出"轻度困扰"（语义级判断交给分类模型），故该档位不在此定义。
+LEVEL_NORMAL: str = settings.EMOTION_LABELS[0]
+LEVEL_MID: str = settings.EMOTION_LABELS[2]
+LEVEL_HIGH: str = settings.EMOTION_LABELS[3]
 
 # 直接定级"高危"的规则：自杀 / 自伤 / 极端绝望表达
 HIGH_RISK_PATTERNS: tuple = (
@@ -58,27 +66,41 @@ class RuleEngine:
     def check(self, text: str, conversation_history: list | None = None) -> dict:
         """对单轮输入执行规则检测。
 
-        返回：{"level": "正常/中度/高危", "hit_rule": 命中的规则描述或 None}
-        说明：规则引擎不输出"正常/轻度"，语义级的判断交给第二层分类模型。
+        返回：{"level": "正常/中度困扰/高危", "hit_rule": 命中的规则描述或 None}
+        取值来自本模块的 LEVEL_* 常量（已与 state 的白名单对齐）。
+        说明：规则引擎不输出"轻度困扰"，语义级的判断交给第二层分类模型。
         """
         history = conversation_history or []
 
         # 1. 高危关键词 / 极端绝望表达：直接高危
         for pattern in self.high_re:
             if pattern.search(text):
-                return {"level": LEVEL_HIGH, "hit_rule": f"高危规则命中: {pattern.pattern}"}
+                return {
+                    "level": LEVEL_HIGH,
+                    "hit_rule": f"高危规则命中: {pattern.pattern}",
+                }
 
         # 2. 严重自我否定：定级中度（留给融合逻辑做二次确认）
         for pattern in self.mid_re:
             if pattern.search(text):
-                return {"level": LEVEL_MID, "hit_rule": f"中度规则命中: {pattern.pattern}"}
+                return {
+                    "level": LEVEL_MID,
+                    "hit_rule": f"中度规则命中: {pattern.pattern}",
+                }
 
         # 3. 多轮累积检测：连续 N 轮出现负面情绪弱信号 → 升级一级
-        recent_texts = self._recent_user_texts(history, rounds=settings.ESCALATION_ROUNDS)
-        if recent_texts and all(any(p.search(t) for p in self.negative_re) for t in recent_texts):
-            return {"level": LEVEL_MID, "hit_rule": f"连续{settings.ESCALATION_ROUNDS}轮负面情绪累积"}
+        recent_texts = self._recent_user_texts(
+            history, rounds=settings.ESCALATION_ROUNDS
+        )
+        if recent_texts and all(
+            any(p.search(t) for p in self.negative_re) for t in recent_texts
+        ):
+            return {
+                "level": LEVEL_MID,
+                "hit_rule": f"连续{settings.ESCALATION_ROUNDS}轮负面情绪累积",
+            }
 
-        return {"level": "正常", "hit_rule": None}
+        return {"level": LEVEL_NORMAL, "hit_rule": None}
 
     @staticmethod
     def _recent_user_texts(history: list, rounds: int) -> list:

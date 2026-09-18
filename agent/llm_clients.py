@@ -14,6 +14,7 @@ Langfuse 集成：三个 chat 入口函数均挂载 ``@observe_llm`` 装饰器�
 启用追踪时每次调用的参数 / 返回值 / 耗时 / 降级事件自动上报，
 业务代码零侵入；未启用时装饰器原样透传。
 """
+
 import json
 
 from openai import OpenAI
@@ -35,8 +36,13 @@ def _build_messages(prompt: str, system: str | None) -> list[dict]:
     return messages
 
 
-def _call_llm(client: OpenAI, model: str, messages: list[dict],
-              temperature: float, json_mode: bool = False) -> str:
+def _call_llm(
+    client: OpenAI,
+    model: str,
+    messages: list[dict],
+    temperature: float,
+    json_mode: bool = False,
+) -> str:
     """底层单次调用（不降级）：失败直接抛异常，由上层封装决定降级方向。
 
     :param json_mode: 是否强制 JSON 输出（response_format），用于结构化任务
@@ -72,7 +78,9 @@ def _get_qwen_client() -> OpenAI:
 
 
 @observe_llm
-def chat_deepseek(prompt: str, system: str | None = None, temperature: float = 0.3) -> str:
+def chat_deepseek(
+    prompt: str, system: str | None = None, temperature: float = 0.3
+) -> str:
     """DeepSeek 调用，失败时自动降级到 Qwen 端点。
 
     :param prompt: Prompt
@@ -81,13 +89,15 @@ def chat_deepseek(prompt: str, system: str | None = None, temperature: float = 0
     """
     messages = _build_messages(prompt, system)
     try:
-        return _call_llm(_get_deepseek_client(), settings.DEEPSEEK_MODEL,
-                         messages, temperature)
+        return _call_llm(
+            _get_deepseek_client(), settings.DEEPSEEK_MODEL, messages, temperature
+        )
     except Exception as deepseek_error:
         # 降级链第一环：核心模型不可用时由轻量端点承接，保证服务不中断
         print(f"[llm_clients] DeepSeek 调用失败，降级到轻量端点: {deepseek_error}")
-        return _call_llm(_get_qwen_client(), settings.LOCAL_LLM_MODEL,
-                         messages, temperature)
+        return _call_llm(
+            _get_qwen_client(), settings.LOCAL_LLM_MODEL, messages, temperature
+        )
 
 
 def chat_qwen(prompt: str, system: str | None = None, temperature: float = 0.1) -> str:
@@ -99,13 +109,15 @@ def chat_qwen(prompt: str, system: str | None = None, temperature: float = 0.1) 
     """
     messages = _build_messages(prompt, system)
     try:
-        return _call_llm(_get_qwen_client(), settings.LOCAL_LLM_MODEL,
-                         messages, temperature)
+        return _call_llm(
+            _get_qwen_client(), settings.LOCAL_LLM_MODEL, messages, temperature
+        )
     except Exception as qwen_error:
         # 降级链第二环：轻量端点不可用时由 DeepSeek 承接轻量任务
         print(f"[llm_clients] 轻量端点调用失败，降级到 DeepSeek: {qwen_error}")
-        return _call_llm(_get_deepseek_client(), settings.DEEPSEEK_MODEL,
-                         messages, temperature)
+        return _call_llm(
+            _get_deepseek_client(), settings.DEEPSEEK_MODEL, messages, temperature
+        )
 
 
 @observe_llm
@@ -121,20 +133,31 @@ def chat_qwen_json(prompt: str, system: str | None = None) -> str:
 
     # 第一级：原生 JSON 模式
     try:
-        return _call_llm(_get_qwen_client(), settings.LOCAL_LLM_MODEL,
-                         messages, temperature=0.1, json_mode=True)
+        return _call_llm(
+            _get_qwen_client(),
+            settings.LOCAL_LLM_MODEL,
+            messages,
+            temperature=0.1,
+            json_mode=True,
+        )
     except Exception:
         pass  # 端点可能不支持 response_format，继续尝试回退方案
 
     # 第二级：普通调用（依靠 Prompt 中的 JSON 输出要求）
     try:
-        return _call_llm(_get_qwen_client(), settings.LOCAL_LLM_MODEL,
-                         messages, temperature=0.1)
+        return _call_llm(
+            _get_qwen_client(), settings.LOCAL_LLM_MODEL, messages, temperature=0.1
+        )
     except Exception as qwen_error:
         # 第三级：轻量端点整体不可用，DeepSeek JSON 模式兜底
         print(f"[llm_clients] 轻量端点不可用，JSON 任务降级到 DeepSeek: {qwen_error}")
-        return _call_llm(_get_deepseek_client(), settings.DEEPSEEK_MODEL,
-                         messages, temperature=0.1, json_mode=True)
+        return _call_llm(
+            _get_deepseek_client(),
+            settings.DEEPSEEK_MODEL,
+            messages,
+            temperature=0.1,
+            json_mode=True,
+        )
 
 
 def parse_json_response(raw: str) -> dict:
@@ -153,5 +176,5 @@ def parse_json_response(raw: str) -> dict:
 
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
-        return json.loads(text[start:end + 1])
+        return json.loads(text[start : end + 1])
     raise ValueError(f"响应中未找到合法 JSON: {raw[:100]}")

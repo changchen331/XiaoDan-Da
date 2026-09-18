@@ -8,6 +8,7 @@
 - 手册类：递归字符切分（章节 → 段落 → 句子），768 token + 10% 重叠
 - 表格类：整表一个 chunk，前置一句文本描述（保证向量有语义可编码）
 """
+
 import re
 
 # 手册类递归切分参数：768 token 保留完整语义单元，10% 重叠防止关键信息落在边界
@@ -73,7 +74,9 @@ def _chunk_notice(text: str, meta: dict) -> list:
     与查询"选课"的语义对齐度高，天然利于召回。
     """
     lines = text.split("\n")
-    title_indices = [i for i, line in enumerate(lines) if NOTICE_TITLE_RE.match(line.strip())]
+    title_indices = [
+        i for i, line in enumerate(lines) if NOTICE_TITLE_RE.match(line.strip())
+    ]
 
     # 无标题行（单条通知或非标准格式）：整体一个 chunk
     if not title_indices:
@@ -82,7 +85,7 @@ def _chunk_notice(text: str, meta: dict) -> list:
     chunks: list = []
     boundaries = title_indices + [len(lines)]
     for i in range(len(title_indices)):
-        piece = "\n".join(lines[boundaries[i]:boundaries[i + 1]]).strip()
+        piece = "\n".join(lines[boundaries[i] : boundaries[i + 1]]).strip()
         if piece:
             chunks.append({"text": piece, "metadata": {**meta, "doc_type": "通知"}})
     return chunks
@@ -100,11 +103,16 @@ def _chunk_manual(text: str, meta: dict) -> list:
         chunk_size=CHUNK_SIZE,
         overlap=CHUNK_OVERLAP,
     )
-    return [{"text": piece, "metadata": {**meta, "doc_type": "手册"}}
-            for piece in pieces if piece.strip()]
+    return [
+        {"text": piece, "metadata": {**meta, "doc_type": "手册"}}
+        for piece in pieces
+        if piece.strip()
+    ]
 
 
-def _recursive_split(text: str, separators: list, chunk_size: int, overlap: int) -> list:
+def _recursive_split(
+    text: str, separators: list, chunk_size: int, overlap: int
+) -> list:
     """递归字符切分核心：逐级降档使用分隔符，直到片段满足长度约束。
 
     :param text: 待切分文本
@@ -127,7 +135,7 @@ def _recursive_split(text: str, separators: list, chunk_size: int, overlap: int)
             return [text]
         return _hard_split(text, chunk_size, overlap)
 
-    next_separators = separators[separators.index(chosen) + 1:]
+    next_separators = separators[separators.index(chosen) + 1 :]
     pieces: list = []
     for piece in _split_keeping_separator(text, chosen):
         if len(piece) <= chunk_size:
@@ -136,15 +144,15 @@ def _recursive_split(text: str, separators: list, chunk_size: int, overlap: int)
             # 片段仍超长：降档到更细的分隔符递归处理
             pieces.extend(_recursive_split(piece, next_separators, chunk_size, overlap))
 
-    return _merge_with_overlap([piece for piece in pieces if piece.strip()],
-                               chunk_size, overlap)
+    return _merge_with_overlap(
+        [piece for piece in pieces if piece.strip()], chunk_size, overlap
+    )
 
 
 def _hard_split(text: str, chunk_size: int, overlap: int) -> list:
     """字符级硬切（最后的兜底手段）：滑动窗口切 + 重叠。"""
     step = max(chunk_size - overlap, 1)
-    return [text[start:start + chunk_size]
-            for start in range(0, len(text), step)]
+    return [text[start : start + chunk_size] for start in range(0, len(text), step)]
 
 
 def _split_keeping_separator(text: str, separator: str) -> list:
@@ -190,4 +198,6 @@ def _chunk_table(text: str, meta: dict) -> list:
     （如"这是 2026-2027 学年复旦大学校历"）为编码器提供了可匹配的语义锚点。
     """
     description = f"这是{meta.get('description', '')}的表格内容".replace("的的", "的")
-    return [{"text": f"{description}\n{text}", "metadata": {**meta, "doc_type": "表格"}}]
+    return [
+        {"text": f"{description}\n{text}", "metadata": {**meta, "doc_type": "表格"}}
+    ]

@@ -19,6 +19,7 @@
 整体准确率会被占多数的"正常"类主导，无法反映安全底线），
 连续 2 个 epoch 无提升即停止，恢复最优权重。
 """
+
 import argparse
 import json
 import os
@@ -100,8 +101,9 @@ class WeightedTrainer(Trainer):
         """加权损失计算：labels 从 inputs 中取出单独参与损失函数。"""
         labels = inputs.pop("labels")
         outputs = model(**inputs)
-        loss = self.loss_fct(outputs.logits.view(-1, model.config.num_labels),
-                             labels.view(-1))
+        loss = self.loss_fct(
+            outputs.logits.view(-1, model.config.num_labels), labels.view(-1)
+        )
         return (loss, outputs) if return_outputs else loss
 
 
@@ -146,7 +148,10 @@ def compute_metrics(eval_prediction) -> dict:
 
     high_risk_id = settings.EMOTION_LABELS.index("高危")
     high_risk_recall = recall_score(
-        labels, predictions, labels=[high_risk_id], average=None,
+        labels,
+        predictions,
+        labels=[high_risk_id],
+        average=None,
         zero_division=0,
     )[0]
 
@@ -172,7 +177,11 @@ def train(train_path: str, val_path: str | None) -> None:
         val_texts, val_labels = load_corpus(val_path)
     else:
         texts, val_texts, labels, val_labels = train_test_split(
-            texts, labels, test_size=0.2, random_state=42, stratify=labels,
+            texts,
+            labels,
+            test_size=0.2,
+            random_state=42,
+            stratify=labels,
         )
 
     # 高危过采样（仅训练集）
@@ -240,15 +249,21 @@ def train(train_path: str, val_path: str | None) -> None:
     trainer.save_model(final_path)
     tokenizer.save_pretrained(final_path)
     print(f"[train_emotion] 模型已保存至 {final_path}")
-    print("[train_emotion] 下一步：运行 python evaluation/emotion_eval.py 验证高危召回率 > 95%")
+    print(
+        "[train_emotion] 下一步：运行 python evaluation/emotion_eval.py 验证高危召回率 > 95%"
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="XLM-RoBERTa 情绪分类模型微调")
-    parser.add_argument("--train", default="data/eval/emotion_train.json",
-                        help="训练语料路径（JSON 数组，含 text/label 字段）")
-    parser.add_argument("--val", default=None,
-                        help="验证语料路径，缺省时从训练集分层切出 20%%")
+    parser.add_argument(
+        "--train",
+        default="data/eval/emotion_train.json",
+        help="训练语料路径（JSON 数组，含 text/label 字段）",
+    )
+    parser.add_argument(
+        "--val", default=None, help="验证语料路径，缺省时从训练集分层切出 20%%"
+    )
     args = parser.parse_args()
 
     train(args.train, args.val)

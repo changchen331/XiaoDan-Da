@@ -22,6 +22,7 @@ FAQ 专用索引的快路径内嵌在 retrieve 节点（预查 + 轻量校验）
 数据库不可用时自动降级为无记忆模式（由调用方显式传入
 conversation_history 补偿）。
 """
+
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import (
@@ -65,10 +66,16 @@ def _get_checkpointer():
     if not _checkpointer_initialized:
         _checkpointer_initialized = True
         try:
-            import psycopg2
+            import psycopg
             from langgraph.checkpoint.postgres import PostgresSaver
 
-            connection = psycopg2.connect(settings.postgres_dsn)
+            # 必须使用 psycopg 3：这才是 langgraph-checkpoint-postgres 的依赖
+            # （psycopg2 是另一套独立实现，两者不可混用；此前传 psycopg2 连接
+            # 导致 saver 内部调用失败，且异常被下面的宽泛捕获吞掉，
+            # 表现为"静默降级为无短期记忆"）
+            # autocommit=True 是 setup() 的硬性要求：其中包含
+            # CREATE INDEX CONCURRENTLY，该语句不允许在事务块内执行
+            connection = psycopg.connect(settings.postgres_dsn, autocommit=True)
             checkpointer = PostgresSaver(connection)
             checkpointer.setup()
             _checkpointer = checkpointer
@@ -103,7 +110,8 @@ def build_graph():
 
     # 情绪分流：高危 → 上报分支；其余 → 正常问答
     graph.add_conditional_edges(
-        "emotion_detect", route_after_emotion,
+        "emotion_detect",
+        route_after_emotion,
         {"report": "report", "intent_route": "intent_route"},
     )
 
@@ -113,7 +121,8 @@ def build_graph():
 
     # 意图分流：三条处理分支（简单问答与 FAQ 合流到 retrieve）
     graph.add_conditional_edges(
-        "intent_route", route_after_intent,
+        "intent_route",
+        route_after_intent,
         {
             "retrieve": "retrieve",
             "plan_and_retrieve": "plan_and_retrieve",
@@ -123,7 +132,8 @@ def build_graph():
 
     # 检索分流：FAQ 预查命中 → 关怀后缀直返；未命中 → 生成流程
     graph.add_conditional_edges(
-        "retrieve", route_after_retrieve,
+        "retrieve",
+        route_after_retrieve,
         {"care_suffix": "care_suffix", "generate": "generate"},
     )
 
@@ -138,13 +148,15 @@ def build_graph():
 
     # 质量分流：合格走关怀后缀收尾；不合格回退检索重试（受 retry_count 上限保护）
     graph.add_conditional_edges(
-        "quality_check", route_after_quality,
+        "quality_check",
+        route_after_quality,
         {"care_suffix": "care_suffix", "retrieve": "retrieve"},
     )
 
     # 关怀后缀分流：闲聊不写记忆直接结束，其余写入长期记忆
     graph.add_conditional_edges(
-        "care_suffix", route_after_care_suffix,
+        "care_suffix",
+        route_after_care_suffix,
         {END: END, "memory_write": "memory_write"},
     )
 
@@ -166,9 +178,13 @@ def get_app():
     return _compiled_app
 
 
-def invoke(user_input: str, user_id: str = "anonymous",
-           session_id: str = "default", conversation_history: list | None = None,
-           user_profile: dict | None = None) -> dict:
+def invoke(
+    user_input: str,
+    user_id: str = "anonymous",
+    session_id: str = "default",
+    conversation_history: list | None = None,
+    user_profile: dict | None = None,
+) -> dict:
     """单次调用 Agent 的完整流水线。
 
     :param user_input: 用户原始输入
@@ -183,10 +199,16 @@ def invoke(user_input: str, user_id: str = "anonymous",
         "user_input": user_input,
         "user_id": user_id,
         "session_id": session_id,
-        "conversation_history": conversation_history or [],
         "user_profile": user_profile or {"role": "本科生"},
         "retry_count": 0,
     }
+
+    # conversation_history 只在调用方显式传入时才写入初始状态。
+    # 原因：该字段由节点逐轮追加、靠 Checkpointer 跨轮保留；
+    # 若无条件写入（哪怕写空列表）都会覆盖掉上一轮累积的历史——
+    # 这正是此前"多轮上下文恒为空"的成因（LangGraph 会用输入里出现的键覆盖检查点值）。
+    if conversation_history:
+        initial_state["conversation_history"] = conversation_history
 
     config = {
         "configurable": {"thread_id": session_id},

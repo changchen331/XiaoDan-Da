@@ -10,6 +10,7 @@
 路由失败兜底：任何异常（网络 / JSON 解析）均回退为"简单问答"
 + 原始 query 直接检索 + 中文回复，保证主流程永不中断。
 """
+
 from agent.llm_clients import chat_qwen_json, parse_json_response
 from agent.state import AgentState, IntentResult
 
@@ -29,10 +30,10 @@ INTENT_PROMPT = """你是一个校园问答系统的意图分类器。请分析�
 - "怎么选不上课啊" → "复旦大学本科生选课失败常见原因及解决方法"
 - "那个什么截止日期" → "复旦大学本学期选课截止时间"
 
-任务3：判断用户期望的回复语言
-- 若用户在当前输入或对话历史中明确要求某语言（如"please reply in English"），
-  以该要求为准
-- 否则跟随用户当前输入的语言
+任务3：判断语言，输出两个字段
+- input_language：用户**当前这条输入**使用的是哪种语言（中文 / English）
+- requested_language：用户在本条输入中**明确要求**使用的语言
+  （如"请用中文回答""please reply in English"对应的语言）；未明确提出则为空字符串 ""
 
 用户身份：{role}
 对话历史（最近3轮）：
@@ -40,7 +41,8 @@ INTENT_PROMPT = """你是一个校园问答系统的意图分类器。请分析�
 用户问题：{user_input}
 
 请以JSON格式输出：
-{{"category": "简单问答", "rewritten_query": "改写后的检索query", "response_language": "中文"}}"""
+{{"category": "简单问答", "rewritten_query": "改写后的检索query", "input_language": "中文", "requested_language": ""}}
+"""
 
 # 合法意图类别白名单（模型输出不在其中时按简单问答兜底）
 VALID_CATEGORIES: tuple = ("简单问答", "复杂查询", "FAQ", "闲聊越界")
@@ -53,8 +55,8 @@ def intent_route(state: AgentState) -> dict:
     user_input = state["user_input"]
     history = state.get("conversation_history", [])
     user_profile = state.get("user_profile", {})
-    # 上一轮的语言偏好作为本轮默认值：State 持久化使"说过一次一直生效"成为可能
-    previous_language = state.get("response_language", "中文")
+    # 会话级语言偏好：上一轮已确定则沿用；None 表示本会话尚未确定过
+    previous_language = state.get("response_language")
 
     prompt = INTENT_PROMPT.format(
         role=user_profile.get("role", "未知"),
@@ -62,24 +64,37 @@ def intent_route(state: AgentState) -> dict:
         user_input=user_input,
     )
 
+    input_language = "中文"
+    requested_language = ""
     try:
         raw = chat_qwen_json(prompt)
         result = parse_json_response(raw)
         category = result["category"]
         rewritten_query = result["rewritten_query"]
-        response_language = result.get("response_language", previous_language)
+        input_language = result.get("input_language", "中文")
+        requested_language = result.get("requested_language") or ""
     except (ValueError, KeyError, TypeError) as parse_error:
         # 路由失败兜底：按简单问答处理，用原始输入直接检索，沿用既有语言偏好
         print(f"[intent_route] 意图识别失败，按简单问答处理: {parse_error}")
         category, rewritten_query = "简单问答", user_input
-        response_language = previous_language
 
     # 非法类别防御：模型偶发输出白名单外词汇时归入简单问答
     if category not in VALID_CATEGORIES:
         category = "简单问答"
-    # 非法语言防御：异常值回落为上一轮偏好
-    if response_language not in VALID_LANGUAGES:
+
+    # 语言决策放在代码里而非交给模型，保证行为确定：
+    # 1. 本轮明确要求某语言 → 采纳（这会改写会话偏好）
+    # 2. 否则会话偏好已确定 → 沿用（这里才是"说过一次即持续生效"的实现点）
+    # 3. 否则首次会话，跟随当前输入的语言
+    # 把「本轮输入的语种」与「会话级偏好」分开判断，才能避免偏好被每轮输入重置
+    if requested_language in VALID_LANGUAGES:
+        response_language = requested_language
+    elif previous_language in VALID_LANGUAGES:
         response_language = previous_language
+    elif input_language in VALID_LANGUAGES:
+        response_language = input_language
+    else:
+        response_language = "中文"
 
     return {
         "intent": IntentResult(

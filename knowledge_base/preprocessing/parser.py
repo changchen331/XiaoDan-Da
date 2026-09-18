@@ -8,6 +8,7 @@
 - 'hi_res'：基于视觉模型的精确布局分析（复杂版式 / 扫描件）
 - 'auto'：按文件特征自动选择（默认）
 """
+
 from unstructured.partition.auto import partition
 
 

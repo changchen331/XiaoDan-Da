@@ -9,6 +9,7 @@
 表结构独立于 Checkpointer 的内部表与 emotion_alerts 上报表，
 三个数据域互不干扰，便于分别做权限控制与备份策略。
 """
+
 import psycopg2
 
 from config.settings import settings

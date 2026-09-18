@@ -3,6 +3,7 @@
 用法：python main.py
 前置条件：uv sync（或在已激活的 .venv 中），并在 .env 中配置 DEEPSEEK_API_KEY
 """
+
 from agent.graph import invoke
 
 
@@ -34,8 +35,10 @@ def main() -> None:
         # 开发调试：打印本轮情绪检测结果
         emotion = result.get("emotion")
         if emotion is not None:
-            print(f"[debug] 情绪: {emotion.level} (来源: {emotion.source}, "
-                  f"置信度: {emotion.confidence:.2f})")
+            print(
+                f"[debug] 情绪: {emotion.level} (来源: {emotion.source}, "
+                f"置信度: {emotion.confidence:.2f})"
+            )
 
 
 if __name__ == "__main__":

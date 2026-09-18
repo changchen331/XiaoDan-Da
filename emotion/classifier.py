@@ -9,6 +9,7 @@
 标签约定（与训练脚本一致，顺序即类别 id）：
     0=正常  1=轻度困扰  2=中度困扰  3=高危
 """
+
 import torch
 
 from config.settings import settings
@@ -43,7 +44,9 @@ class EmotionClassifier:
         :return: {"正常": p0, "轻度困扰": p1, "中度困扰": p2, "高危": p3}，
             四项概率之和为 1
         """
-        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
+        inputs = self.tokenizer(
+            text, return_tensors="pt", truncation=True, max_length=128
+        )
         logits = self.model(**inputs).logits
         probs = torch.softmax(logits, dim=-1).squeeze(0).tolist()
         return dict(zip(self.labels, probs))

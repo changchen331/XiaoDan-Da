@@ -16,6 +16,7 @@ FAQ 专用 Collection（xiaodan_faq）字段设计：
 - tags：主题标签（JSON 数组，用于管理后台分类展示）
 - question_vec：问题向量（dense，HNSW 索引）
 """
+
 from pymilvus import (
     CollectionSchema,
     DataType,
@@ -31,16 +32,59 @@ def get_milvus_client() -> MilvusClient:
     return MilvusClient(uri=settings.MILVUS_URI)
 
 
+def ensure_collection_loaded(client: MilvusClient, collection_name: str) -> None:
+    """确保集合处于已加载状态（load 是查询/检索的前置条件）。
+
+    Milvus 的集合需显式 load 到内存后才能 search/query，否则报
+    ``collection not loaded``。幂等调用，由「创建集合」与「检索服务初始化」
+    两处共同调用：前者覆盖首次建库，后者覆盖 Milvus 服务端重启导致集合被卸载。
+    """
+    try:
+        client.load_collection(collection_name)
+    except Exception as load_error:
+        # 加载失败不阻断调用方：检索侧对异常有兜底（返回空结果集）
+        print(f"[milvus_client] {collection_name} 加载失败: {load_error}")
+
+
 def create_kb_collection() -> None:
-    """创建通用知识库 Collection（幂等：已存在则直接返回）。
+    """创建通用知识库 Collection（幂等，并能修复「有集合无索引」的半成品状态）。
 
     索引选型说明：
     - dense 用 HNSW：图索引，高召回 + 低延迟，适合百万级以下校园知识库
       （M=16 / efConstruction=200 为官方推荐平衡参数；检索时 ef=64）
     - sparse 用倒排索引：稀疏向量只有倒排一种成熟索引形态
+
+    幂等判断必须**同时校验集合与索引**：Milvus 建集合是「先建集合、再建索引」
+    两步操作，中途失败会留下「有集合无索引」的半成品。若只判断集合是否存在，
+    本函数会永久变成空操作，索引再也不会被创建——症状是数据能正常插入，
+    但 load/search 报 ``index not found``，且静态审查与单元测试都发现不了。
     """
     client = get_milvus_client()
+
+    # 索引参数用官方工厂构造：pymilvus 2.4 的 create_collection 期望 IndexParams 对象
+    # （内部按列表迭代，每项须含 field_name），不能传「以字段名为键的 dict」——
+    # 后者会让迭代拿到字符串键，报 'str' object has no attribute 'pop'
+    index_params = client.prepare_index_params()
+    index_params.add_index(
+        field_name="dense",
+        index_type="HNSW",
+        metric_type="IP",
+        params={"M": 16, "efConstruction": 200},
+    )
+    index_params.add_index(
+        field_name="sparse",
+        index_type="SPARSE_INVERTED_INDEX",
+        metric_type="IP",
+    )
+
     if client.has_collection(settings.MILVUS_COLLECTION):
+        if not client.list_indexes(collection_name=settings.MILVUS_COLLECTION):
+            client.create_index(
+                collection_name=settings.MILVUS_COLLECTION,
+                index_params=index_params,
+            )
+            print(f"[milvus_client] {settings.MILVUS_COLLECTION} 已存在但缺索引，已补建")
+        ensure_collection_loaded(client, settings.MILVUS_COLLECTION)
         return
 
     fields = [
@@ -50,34 +94,43 @@ def create_kb_collection() -> None:
         FieldSchema(name="sparse", dtype=DataType.SPARSE_FLOAT_VECTOR),
         FieldSchema(name="metadata", dtype=DataType.JSON),
     ]
-    schema = CollectionSchema(fields=fields, description="小旦答通用知识库（dense+sparse 双路）")
+    schema = CollectionSchema(
+        fields=fields, description="小旦答通用知识库（dense+sparse 双路）"
+    )
 
     client.create_collection(
         collection_name=settings.MILVUS_COLLECTION,
         schema=schema,
-        index_params={
-            "dense": {
-                "index_type": "HNSW",
-                "metric_type": "IP",
-                "params": {"M": 16, "efConstruction": 200},
-            },
-            "sparse": {
-                "index_type": "SPARSE_INVERTED_INDEX",
-                "metric_type": "IP",
-            },
-        },
+        index_params=index_params,
     )
     print(f"[milvus_client] 已创建 Collection: {settings.MILVUS_COLLECTION}")
+    ensure_collection_loaded(client, settings.MILVUS_COLLECTION)
 
 
 def create_faq_collection() -> None:
-    """创建 FAQ 专用 Collection（幂等）。
+    """创建 FAQ 专用 Collection（幂等，含半成品修复，见 create_kb_collection）。
 
     FAQ 索引只需 dense 单路：FAQ 匹配是高置信度精确问答场景，
     语义向量足够，稀疏关键词路由收益有限。
     """
     client = get_milvus_client()
+
+    index_params = client.prepare_index_params()
+    index_params.add_index(
+        field_name="question_vec",
+        index_type="HNSW",
+        metric_type="IP",
+        params={"M": 16, "efConstruction": 200},
+    )
+
     if client.has_collection(settings.MILVUS_FAQ_COLLECTION):
+        if not client.list_indexes(collection_name=settings.MILVUS_FAQ_COLLECTION):
+            client.create_index(
+                collection_name=settings.MILVUS_FAQ_COLLECTION,
+                index_params=index_params,
+            )
+            print(f"[milvus_client] {settings.MILVUS_FAQ_COLLECTION} 已存在但缺索引，已补建")
+        ensure_collection_loaded(client, settings.MILVUS_FAQ_COLLECTION)
         return
 
     fields = [
@@ -86,22 +139,19 @@ def create_faq_collection() -> None:
         FieldSchema(name="answer", dtype=DataType.VARCHAR, max_length=16384),
         FieldSchema(name="similar_questions", dtype=DataType.JSON),
         FieldSchema(name="tags", dtype=DataType.JSON),
-        FieldSchema(name="question_vec", dtype=DataType.FLOAT_VECTOR, dim=settings.EMBED_DIM),
+        FieldSchema(
+            name="question_vec", dtype=DataType.FLOAT_VECTOR, dim=settings.EMBED_DIM
+        ),
     ]
     schema = CollectionSchema(fields=fields, description="小旦答 FAQ 高置信度专用索引")
 
     client.create_collection(
         collection_name=settings.MILVUS_FAQ_COLLECTION,
         schema=schema,
-        index_params={
-            "question_vec": {
-                "index_type": "HNSW",
-                "metric_type": "IP",
-                "params": {"M": 16, "efConstruction": 200},
-            },
-        },
+        index_params=index_params,
     )
     print(f"[milvus_client] 已创建 Collection: {settings.MILVUS_FAQ_COLLECTION}")
+    ensure_collection_loaded(client, settings.MILVUS_FAQ_COLLECTION)
 
 
 def insert_chunks(chunks: list, vectors: list) -> int:

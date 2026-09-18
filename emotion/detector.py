@@ -5,13 +5,14 @@
    高危规则命中直接定级，不再经过模型 —— 这是安全兜底网，
    确保即使分类模型遇到训练集未覆盖的表达，最危险的 case 也绝不漏掉
 2. 第二层分类模型：XLM-RoBERTa 语义理解，覆盖规则无法触达的隐晦表达
-3. 融合升级：规则判"中度" + 模型高危概率超阈值 → 升级为"高危"
+3. 融合升级：规则判"中度困扰" + 模型高危概率超阈值 → 升级为"高危"
    （两层同时给出中等风险信号时，按"宁严勿漏"原则取高）
 
 性能设计：分类器为进程级单例（模型加载耗时数秒，绝不能每条消息重载）。
 """
+
 from config.settings import settings
-from emotion.rule_engine import RuleEngine
+from emotion.rule_engine import LEVEL_HIGH, LEVEL_MID, LEVEL_NORMAL, RuleEngine
 
 # 进程级单例：规则引擎（纯正则，构造开销小，但单例避免重复编译正则）
 _rule_engine: "RuleEngine | None" = None
@@ -39,8 +40,8 @@ def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
 
     # ===== 第一层：规则引擎（安全兜底网，高危即阻断）=====
     rule_result = _rule_engine.check(text, conversation_history)
-    if rule_result["level"] == "高危":
-        return {"level": "高危", "source": "规则引擎", "confidence": 1.0}
+    if rule_result["level"] == LEVEL_HIGH:
+        return {"level": LEVEL_HIGH, "source": "规则引擎", "confidence": 1.0}
 
     # ===== 第二层：分类模型（语义级检测）=====
     model_probs = _predict_with_model(text)
@@ -48,18 +49,30 @@ def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
     if model_probs is None:
         # 模型不可用（权重缺失 / 依赖异常）时的降级策略：
         # 规则中度维持中度，其余放行为正常，安全兜底网仍在
-        level = rule_result["level"] if rule_result["level"] == "中度" else "正常"
+        level = (
+            rule_result["level"] if rule_result["level"] == LEVEL_MID else LEVEL_NORMAL
+        )
         return {"level": level, "source": "规则引擎", "confidence": 0.6}
 
     model_level = max(model_probs, key=model_probs.get)
 
     # ===== 融合升级：规则中度 + 模型高危概率超阈值 → 高危 =====
-    if (rule_result["level"] == "中度"
-            and model_probs.get("高危", 0.0) > settings.HIGH_RISK_PROB_THRESHOLD):
-        return {"level": "高危", "source": "规则+模型融合", "confidence": model_probs["高危"]}
+    if (
+        rule_result["level"] == LEVEL_MID
+        and model_probs.get(LEVEL_HIGH, 0.0) > settings.HIGH_RISK_PROB_THRESHOLD
+    ):
+        return {
+            "level": LEVEL_HIGH,
+            "source": "规则+模型融合",
+            "confidence": model_probs[LEVEL_HIGH],
+        }
 
     # ===== 模型独立判断（正常 / 轻度 / 中度）=====
-    return {"level": model_level, "source": "分类模型", "confidence": model_probs[model_level]}
+    return {
+        "level": model_level,
+        "source": "分类模型",
+        "confidence": model_probs[model_level],
+    }
 
 
 def _predict_with_model(text: str) -> dict | None:

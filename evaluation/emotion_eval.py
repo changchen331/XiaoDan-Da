@@ -16,6 +16,7 @@
 1. 混淆矩阵最后一行的非对角线元素 = 被漏报的高危样本（最严重错误）
 2. 整体准确率仅作参考：类别不平衡下会被"正常"类主导
 """
+
 import argparse
 import json
 
@@ -52,12 +53,16 @@ def run_emotion_eval(y_true: list, y_pred: list) -> dict:
     print(classification_report(y_true, y_pred, labels=LABELS, zero_division=0))
 
     # 2. 高危召回率：唯一硬性上线指标
-    high_risk_recall = recall_score(
-        y_true, y_pred, labels=["高危"], average=None, zero_division=0
-    )[0] if "高危" in y_true else 0.0
+    high_risk_recall = (
+        recall_score(y_true, y_pred, labels=["高危"], average=None, zero_division=0)[0]
+        if "高危" in y_true
+        else 0.0
+    )
     passed = high_risk_recall >= HIGH_RISK_RECALL_TARGET
-    print(f"高危召回率: {high_risk_recall:.2%} (目标 > {HIGH_RISK_RECALL_TARGET:.0%}) "
-          f"[{'PASS' if passed else 'FAIL - 不能上线，必须继续优化'}]")
+    print(
+        f"高危召回率: {high_risk_recall:.2%} (目标 > {HIGH_RISK_RECALL_TARGET:.0%}) "
+        f"[{'PASS' if passed else 'FAIL - 不能上线，必须继续优化'}]"
+    )
 
     # 3. 混淆矩阵：行=真实，列=预测
     cm = confusion_matrix(y_true, y_pred, labels=LABELS)
@@ -65,7 +70,9 @@ def run_emotion_eval(y_true: list, y_pred: list) -> dict:
     print(cm)
 
     # 4. 漏报高危明细统计：混淆矩阵最后一行的非对角线之和
-    missed = int(cm[LABELS.index("高危")].sum() - cm[LABELS.index("高危")][LABELS.index("高危")])
+    missed = int(
+        cm[LABELS.index("高危")].sum() - cm[LABELS.index("高危")][LABELS.index("高危")]
+    )
     print(f"\n被漏报的高危样本数: {missed}（最严重的错误类型）")
 
     return {"high_risk_recall": high_risk_recall, "passed": passed}
@@ -94,8 +101,11 @@ def main(eval_data_path: str) -> dict:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="小旦答情绪检测评测")
-    parser.add_argument("--data", default="data/eval/emotion_eval.json",
-                        help="评测集路径（JSON 数组，含 text/label 字段）")
+    parser.add_argument(
+        "--data",
+        default="data/eval/emotion_eval.json",
+        help="评测集路径（JSON 数组，含 text/label 字段）",
+    )
     args = parser.parse_args()
 
     main(args.data)
