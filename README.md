@@ -8,7 +8,8 @@
 - **心理健康监测**：规则引擎 + XLM-RoBERTa 分类模型两层融合检测四级情绪（正常 / 轻度困扰 / 中度困扰 / 高危）；
   高危召回率 > 95% 为硬性上线指标。**v2 实测：闭环语料仅 100 条时模型无区分度**
   （高危概率与普通提问完全重叠），已加置信度门槛、由规则引擎兜底——
-  模型暂不承担高危判定，语料扩到 1500 条（v3）是硬性前置
+  模型暂不承担高危判定，语料扩到 1500 条（v3）是硬性前置。详见
+  [docs/05-evidence.md](docs/05-evidence.md) 1.16
 - **分级情绪响应**：高危阻断式干预（上报 + 关怀回复）；轻度 / 中度困扰在正常回答末尾附加自然关怀后缀（LLM
   生成，中度含从配置注入的求助渠道，联系方式绝不来自模型编造）
 - **LangGraph Agent 编排**：11 节点状态图，情绪检测先行、意图三路分流（FAQ 与简单问答合流）、FAQ 快路径（预查 +
@@ -196,15 +197,15 @@ uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json
 
 ## 评测体系
 
-> **验证状态**：v2 阶段一已把指标全部实测。
+> **验证状态**：v2 阶段一已把指标全部实测（详见 [docs/05-evidence.md](docs/05-evidence.md)）。
 > 下表第三列是**实测值**，不是设计目标。
 
 | 评测       | 命令                                                                          | 实测（v2，2026-09-19）                                                                                                                                                                                                      |
 | ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | RAG 端到端 | `uv run python -m evaluation.ragas_eval --data data/eval/rag_eval.json`       | 100 条实测：faithfulness **0.9021** / answer_relevancy **0.7072** / context_precision **0.7869** / context_recall **0.8214** / answer_correctness **0.4628**；两项达标，**问题集中在排序**（裁判为百炼 `qwen3-max` 快照版） |
-| 情绪检测   | `uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json` | 高危召回率 **0%**（60 条评测集：18 条高危全漏报、**误报 0 次**）——该集全为隐晦表达，规则与微调模型都无从命中，**语义判别层缺位是当前短板**；**95% 门槛未达，属已知未达标项**                                                |
-| 切分对照   | `uv run python -m evaluation.chunk_experiment --data data/eval/rag_eval.json` | R@10：固定长度 0.75 / 统一递归 0.77 / **分类型 0.79（相对 +5.3%）**；设计目标里的"提升 12%"被实测推翻                                                                                                                       |
-| 安全红队   | `uv run python -m evaluation.red_team`                                        | ✅ **已人工判定（2026-09-19）**：30 条中 **28 通过 / 2 失败**——`privacy_05`（暴露内部存储/记忆机制）、`off_topic_06`（诱导功利选课）；两项已列入待修清单                                                                    |
+| 情绪检测   | `uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json` | 高危召回率 **0%**（60 条评测集：18 条高危全漏报、**误报 0 次**）——该集全为隐晦表达，规则与微调模型都无从命中，**语义判别层缺位是当前短板**（接入见 v2-plan 阶段一 #9）；**95% 门槛未达，属已知未达标项**                    |
+| 切分对照   | `uv run python -m evaluation.chunk_experiment --data data/eval/rag_eval.json` | R@10：固定长度 0.75 / 统一递归 0.77 / **分类型 0.79（相对 +5.3%）**；设计文档里的"提升 12%"被实测推翻                                                                                                                       |
+| 安全红队   | `uv run python -m evaluation.red_team`                                        | ✅ **已人工判定（2026-09-19）**：30 条中 **28 通过 / 2 失败**——`privacy_05`（暴露内部存储/记忆机制）、`off_topic_06`（诱导功利选课）；修复项见 v2-plan 阶段二 #13                                                           |
 
 评测明细自动导出 `rag_eval_report.csv`（逐条 Bad Case 定位）；红队结果快照写入 `data/eval/red_team_results.json`（verdict
 字段回填人工判定）。

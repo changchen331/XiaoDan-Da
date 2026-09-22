@@ -53,6 +53,7 @@ dependencies = [
     # 已被移除，且 uv 创建的虚拟环境默认不含 setuptools，不声明会直接 ImportError
     "setuptools<81",
     "psycopg[binary]>=3.2",
+    "langchain-community>=0.4.1,<0.4.2",
 ]
 
 # 开发依赖（uv sync 默认安装，Docker 镜像构建用 --no-dev 跳过）

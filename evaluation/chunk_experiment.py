@@ -4,7 +4,7 @@
     python evaluation/chunk_experiment.py --data data/eval/rag_eval.json
 
 被验证的说法：chunker.py 此前写着"实测 Recall@10 提升 12%"，
-但仓库里没有任何实验记录支撑这个数字——它一直是未经验证的设计目标。
+但仓库里没有任何实验记录支撑这个数字——它属于 v1 自查清单里的"未验证项"。
 本脚本用评测集把它变成可复现的实测值，无论结论是证实还是推翻。
 
 三个对照策略（同一份解析文本，只改切分边界）：
@@ -99,9 +99,7 @@ def encode_texts(texts: list, is_query: bool = False) -> np.ndarray:
         batch = texts[start : start + ENCODE_BATCH]
         vectors = [item["dense"] for item in embedder.encode(batch, is_query=is_query)]
         batches.append(np.asarray(vectors, dtype=np.float32))
-        print(
-            f"[chunk_experiment] 编码 {min(start + ENCODE_BATCH, len(texts))}/{len(texts)}"
-        )
+        print(f"[chunk_experiment] 编码 {min(start + ENCODE_BATCH, len(texts))}/{len(texts)}")
 
     matrix = np.vstack(batches)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
@@ -118,10 +116,7 @@ def top_k_indices(scores: np.ndarray, top_k: int) -> list:
 
 
 def evaluate_strategy(
-    chunks: list,
-    chunk_matrix: np.ndarray,
-    query_matrix: np.ndarray,
-    eval_items: list,
+    chunks: list, chunk_matrix: np.ndarray, query_matrix: np.ndarray, eval_items: list,
     top_k: int,
 ) -> dict:
     """对单一策略计算 Recall@1/@5/@k 与不可定位条数。"""
@@ -173,9 +168,7 @@ def run(data_path: str, top_k: int, max_questions: int | None) -> dict:
 
     records, failures = iter_document_records()
     if failures:
-        print(
-            f"[chunk_experiment] 注意：{len(failures)} 篇文档解析失败，其 chunk 不在检索池中"
-        )
+        print(f"[chunk_experiment] 注意：{len(failures)} 篇文档解析失败，其 chunk 不在检索池中")
     chunks_by_strategy = build_strategy_chunks(records)
 
     # 完整性校验：评测集里记录的 chunk_id 必须在 by_type 结果中确实含该证据，
@@ -198,9 +191,7 @@ def run(data_path: str, top_k: int, max_questions: int | None) -> dict:
         )
     print("[chunk_experiment] 校验通过：评测集来源 chunk 与线上切分逐字一致")
 
-    query_matrix = encode_texts(
-        [item["question"] for item in eval_items], is_query=True
-    )
+    query_matrix = encode_texts([item["question"] for item in eval_items], is_query=True)
 
     report: dict = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -267,7 +258,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out",
         default="data/eval/chunk_experiment.json",
-        help="实验报告输出路径",
+        help="实验报告输出路径（供 docs/05-evidence.md 引用）",
     )
     args = parser.parse_args()
 
