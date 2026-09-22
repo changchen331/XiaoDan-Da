@@ -33,8 +33,6 @@ models/*
 *.bin
 *.safetensors
 
-docs/
-
 # ===== 日志与运行产物 =====
 logs/
 *.log
