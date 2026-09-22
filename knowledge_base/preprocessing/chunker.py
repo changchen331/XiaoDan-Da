@@ -1,12 +1,15 @@
 """分类型切分策略：按文档形态选择最优切分方式。
 
 相比统一的固定长度切分，分类型切分保留了文档的自然边界
-（问答对边界 / 通知边界 / 章节边界），实测 Recall@10 提升 12%：
+（问答对边界 / 通知边界 / 章节边界）：
 - FAQ 类：按问答对切分，每个"问+答"一个 chunk，绝不拆散
 - 通知类：按标题分界（"关于……的通知"），每条通知一个 chunk，
   天然携带发布时间与发布部门上下文
 - 手册类：递归字符切分（章节 → 段落 → 句子），768 token + 10% 重叠
 - 表格类：整表一个 chunk，前置一句文本描述（保证向量有语义可编码）
+
+"提升 12%"这一数字的来源见 evaluation/chunk_experiment.py 的实测结果，
+不以未经度量的说法出现在文档里。
 """
 
 import re
@@ -200,4 +203,21 @@ def _chunk_table(text: str, meta: dict) -> list:
     description = f"这是{meta.get('description', '')}的表格内容".replace("的的", "的")
     return [
         {"text": f"{description}\n{text}", "metadata": {**meta, "doc_type": "表格"}}
+    ]
+
+
+def chunk_fixed_length(
+    text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
+) -> list:
+    """统一固定长度切分：不区分文档类型，按字符窗口硬切。
+
+    这是切分策略的**朴素基线**。保留它的意义在于让"分类型切分更好"这个判断
+    可以被度量——没有基线就没有对照，任何"提升 N%"的说法都无法证伪。
+    对照实验见 evaluation/chunk_experiment.py。
+    """
+    step = max(chunk_size - overlap, 1)
+    return [
+        {"text": text[start : start + chunk_size], "metadata": {"doc_type": "固定长度"}}
+        for start in range(0, len(text), step)
+        if text[start : start + chunk_size].strip()
     ]

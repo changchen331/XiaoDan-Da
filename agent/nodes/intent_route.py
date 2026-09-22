@@ -11,7 +11,7 @@
 + 原始 query 直接检索 + 中文回复，保证主流程永不中断。
 """
 
-from agent.llm_clients import chat_qwen_json, parse_json_response
+from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
 from agent.state import AgentState, IntentResult
 
 # 意图分类 + Query 改写 + 语言判定的一体化指令
@@ -73,9 +73,11 @@ def intent_route(state: AgentState) -> dict:
         rewritten_query = result["rewritten_query"]
         input_language = result.get("input_language", "中文")
         requested_language = result.get("requested_language") or ""
-    except (ValueError, KeyError, TypeError) as parse_error:
-        # 路由失败兜底：按简单问答处理，用原始输入直接检索，沿用既有语言偏好
-        print(f"[intent_route] 意图识别失败，按简单问答处理: {parse_error}")
+    except (ValueError, KeyError, TypeError, LLMUnavailableError) as route_error:
+        # 路由失败兜底：按简单问答处理，用原始输入直接检索，沿用既有语言偏好。
+        # 捕获范围必须包含 LLMUnavailableError（降级链耗尽）——只捕解析类异常时，
+        # 两端点同时故障会穿透节点把整轮请求打挂
+        print(f"[intent_route] 意图识别失败，按简单问答处理: {route_error}")
         category, rewritten_query = "简单问答", user_input
 
     # 非法类别防御：模型偶发输出白名单外词汇时归入简单问答

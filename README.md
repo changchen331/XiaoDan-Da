@@ -5,9 +5,11 @@
 ## 核心特性
 
 - **校园知识问答**：BGE-M3 双路向量（稠密语义 + 稀疏关键词）混合检索，BGE-Reranker 精排，分类型文档切分策略，回答严格基于检索上下文（幻觉防控）
-- **心理健康监测**：规则引擎 + XLM-RoBERTa 分类模型两层融合检测四级情绪（正常 / 轻度困扰 / 中度困扰 / 高危），
-  高危召回率 > 95% 为硬性上线指标（**设计目标，尚未验证**——分类模型待标注语料到位后训练，
-  当前走规则引擎兜底）
+- **心理健康监测**：规则引擎 + XLM-RoBERTa 分类模型两层融合检测四级情绪（正常 / 轻度困扰 / 中度困扰 / 高危）；
+  高危召回率 > 95% 为硬性上线指标。**v2 实测：闭环语料仅 100 条时模型无区分度**
+  （高危概率与普通提问完全重叠），已加置信度门槛、由规则引擎兜底——
+  模型暂不承担高危判定，语料扩到 1500 条（v3）是硬性前置。详见
+  [docs/05-evidence.md](docs/05-evidence.md) 1.16
 - **分级情绪响应**：高危阻断式干预（上报 + 关怀回复）；轻度 / 中度困扰在正常回答末尾附加自然关怀后缀（LLM
   生成，中度含从配置注入的求助渠道，联系方式绝不来自模型编造）
 - **LangGraph Agent 编排**：11 节点状态图，情绪检测先行、意图三路分流（FAQ 与简单问答合流）、FAQ 快路径（预查 +
@@ -15,9 +17,8 @@
   回退重试，流程完全可控可解释
 - **多语言偏好**：意图路由同轮判定回复语言（含"请用中文回答"类指令），经 checkpointer 会话级持久化；FAQ
   直返与生成均做语言适配；上报与高危关怀固定中文（面向后台处理者）
-- **高性价比模型分工**：核心生成用 DeepSeek-V3，轻量任务（意图路由 / 质量评估 / Query 改写 / FAQ 校验）用 Qwen2.5-14B，情绪检测用
-  270M 的
-  XLM-RoBERTa（GPU 推理 5-10ms）
+- **高性价比模型分工**：核心生成用 DeepSeek，轻量任务（意图路由 / 质量评估 / Query 改写 / FAQ 校验）用 Qwen，
+  情绪检测用 270M 的 XLM-RoBERTa（GPU 推理 5-10ms）；三者均可通过环境变量切换型号
 - **全链路容错**：LLM 双向降级（DeepSeek ↔ 轻量端点互备）、组件级降级（模型缺失走规则兜底、数据库不可达走无记忆模式），任一组件故障不中断服务
 - **隐私保护设计**：高危上报数据最小化（脱敏 ID + 内容摘要）、与业务数据物理隔离的独立表存储
 
@@ -27,12 +28,12 @@
 flowchart TB
     START([用户输入]) --> EMOTION[情绪检测<br/>规则引擎 + XLM-R 分类模型]
     EMOTION -- 高危 --> REPORT[脱敏上报<br/>写库 + 邮件] --> CARE[高危关怀回复<br/>固定中文] --> END_FINISH([输出])
-    EMOTION -- 正常 --> INTENT[意图路由 + Query 改写 + 语言判定<br/>Qwen2.5-14B]
+    EMOTION -- 正常 --> INTENT[意图路由 + Query 改写 + 语言判定<br/>Qwen]
     INTENT -- 简单问答 / FAQ --> RETRIEVE[检索入口<br/>FAQ 预查 + 轻量校验 + 混合检索]
     INTENT -- 复杂查询 --> PLAN[子查询拆解检索]
     INTENT -- 闲聊越界 --> CHAT[兜底回复]
     RETRIEVE -- FAQ 命中·过校验 --> SUFFIX[关怀后缀<br/>分级: 正常透传 / 轻度关怀 / 中度+渠道]
-    RETRIEVE -- 未命中 --> GENERATE[回答生成<br/>DeepSeek-V3]
+    RETRIEVE -- 未命中 --> GENERATE[回答生成<br/>DeepSeek]
     PLAN --> GENERATE
     GENERATE --> QUALITY[质量评估<br/>忠实度 + 相关性]
     QUALITY -- 不合格·重试≤2 --> RETRIEVE
@@ -44,28 +45,29 @@ flowchart TB
 
 ## 模块总览
 
-| 模块               | 目录                             | 核心内容                                                                                                                                                                                                              |
-| ------------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 一：知识库引擎     | `knowledge_base/`                | 官网增量爬虫 → Unstructured 解析 → 噪声清洗 → 分类型切分（FAQ/通知/手册/表格）→ BGE-M3 双路向量化 → Milvus 入库 → 混合检索（RRF 融合）+ Reranker 精排；FAQ 独立高置信度索引（阈值 0.85 + 轻量校验后直返标准答案）     |
-| 二：情绪检测引擎   | `emotion/`                       | 规则引擎（高危正则零延迟拦截 + 多轮累积升级）→ XLM-RoBERTa 微调（高危样本 3 倍损失权重 + 2 倍过采样 + 高危召回率早停）→ 两层融合（规则中度 + 模型高危概率超阈值 → 升级高危）；四级分级响应（关怀后缀 / 高危阻断上报） |
-| 三：Agent 核心引擎 | `agent/`                         | LangGraph 状态图 11 节点（检索合流 + FAQ 快路径 + care_suffix 分级收尾）；回复语言会话级持久化；短期记忆 PostgresSaver（thread_id 即会话），长期记忆摘要存 `user_memory` 表                                           |
-| 四：评估与可观测   | `evaluation/` + `observability/` | RAGAS 五指标（裁判用 GPT-4o 快照版跨模型族去偏）+ 情绪混淆矩阵（高危召回率门槛）+ 安全红队测试（30 条攻击用例）；Langfuse 全链路追踪（开关式）                                                                        |
-| 五：服务化         | `deployment/`                    | FastAPI 接口（`/chat`、`/health`）；Docker Compose 一键编排 Milvus + PostgreSQL + API 服务（镜像内 uv 按锁文件安装依赖）                                                                                              |
+| 模块               | 目录                             | 核心内容                                                                                                                                                                                                                      |
+| ------------------ | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 一：知识库引擎     | `knowledge_base/`                | 官网增量爬虫 → Unstructured 解析 → 噪声清洗 → 分类型切分（FAQ/通知/手册/表格）→ BGE-M3 双路向量化 → Milvus 入库 → 混合检索（RRF 融合）+ Reranker 精排；FAQ 独立高置信度索引（阈值 0.85 + 轻量校验后直返标准答案）             |
+| 二：情绪检测引擎   | `emotion/`                       | 规则引擎（高危正则零延迟拦截 + 多轮累积升级）→ XLM-RoBERTa 微调（**逆频次类别权重** + 2 倍过采样，倍率随语料分布自适应）→ 两层融合，**模型结论需过置信度门槛**（否则以规则引擎为准）；四级分级响应（关怀后缀 / 高危阻断上报） |
+| 三：Agent 核心引擎 | `agent/`                         | LangGraph 状态图 11 节点（检索合流 + FAQ 快路径 + care_suffix 分级收尾）；回复语言会话级持久化；短期记忆 PostgresSaver（thread_id 即会话），长期记忆摘要存 `user_memory` 表                                                   |
+| 四：评估与可观测   | `evaluation/` + `observability/` | RAGAS 五指标（裁判用 Qwen 日期快照版，与生成模型 DeepSeek 跨族去偏）+ 情绪混淆矩阵（高危召回率门槛）+ **切分策略对照实验（Recall@10）** + 安全红队测试（30 条攻击用例）；Langfuse 全链路追踪（开关式）                        |
+| 五：服务化         | `deployment/`                    | FastAPI 接口（`/chat`、`/health`）；Docker Compose 一键编排 Milvus + PostgreSQL + API 服务（镜像内 uv 按锁文件安装依赖）                                                                                                      |
 
 ## 技术栈
 
-| 层次         | 选型                                                    |
-| ------------ | ------------------------------------------------------- |
-| Agent 编排   | LangGraph + PostgresSaver                               |
-| 生成模型     | DeepSeek-V3（API）                                      |
-| 轻量任务模型 | Qwen2.5-14B-Instruct-AWQ（vLLM 本地部署或云端兼容端点） |
-| 情绪检测     | XLM-RoBERTa-base 全量微调                               |
-| 检索         | BGE-M3（dense 1024 维 + sparse）+ BGE-Reranker-v2-M3    |
-| 向量数据库   | Milvus 2.4（HNSW + 倒排索引，RRF 融合）                 |
-| 关系数据库   | PostgreSQL 16（记忆 / 上报 / Checkpointer 三域分表）    |
-| 评估         | RAGAS + scikit-learn                                    |
-| 可观测       | Langfuse（可选）                                        |
-| 服务         | FastAPI + Docker Compose                                |
+| 层次         | 选型                                                        |
+| ------------ | ----------------------------------------------------------- |
+| Agent 编排   | LangGraph + PostgresSaver                                   |
+| 生成模型     | DeepSeek（API，型号由 `DEEPSEEK_MODEL` 指定）               |
+| 轻量任务模型 | Qwen（`LIGHT_LLM_BASE_URL` 可指向本地 vLLM 或云端兼容端点） |
+| 评测裁判模型 | Qwen 日期快照版（`JUDGE_MODEL`，`temperature=0`）           |
+| 情绪检测     | XLM-RoBERTa-base 全量微调                                   |
+| 检索         | BGE-M3（dense 1024 维 + sparse）+ BGE-Reranker-v2-M3        |
+| 向量数据库   | Milvus 2.4（HNSW + 倒排索引，RRF 融合）                     |
+| 关系数据库   | PostgreSQL 16（记忆 / 上报 / Checkpointer 三域分表）        |
+| 评估         | RAGAS + scikit-learn                                        |
+| 可观测       | Langfuse（可选）                                            |
+| 服务         | FastAPI + Docker Compose                                    |
 
 ## 快速开始
 
@@ -84,11 +86,22 @@ cp .env.example .env
 # 准备数据（见下节"数据准备"）
 ```
 
-GPU 训练说明：`uv sync` 在 Windows 上安装的 torch 为 CPU 版；需要本地 GPU 训练情绪模型时，
-按显卡驱动选择 CUDA 源重装 torch（不经过锁文件，自由安装）：
+GPU 训练说明：`uv sync` 在 Windows 上安装的 torch 为 CPU 版；本机实测该构建下
+BGE-Reranker 单次检索耗时 25–33s（全花在 CPU 上），换成 CUDA 构建后降到 **5.1s**。
+需要 GPU 推理或训练情绪模型时，按显卡驱动选择 CUDA 通道重装 torch
+（不经过锁文件，属"自由安装"）：
 
 ```bash
-uv pip install torch --index-url https://download.pytorch.org/whl/cu124 --upgrade
+# 通道按显卡算力选：cu126 与本机 RTX 4070 Laptop（compute capability 8.9）匹配
+uv pip install torch --index-url https://download.pytorch.org/whl/cu126 --upgrade
+```
+
+若该源在国内网络不可用（实测 download.pytorch.org 仅约 0.35 MB/s 且丢包），
+可直接下 wheel 再本地安装（阿里云镜像 `mirrors.aliyun.com/pytorch-wheels/cu126/`
+实测快 3.5 倍，但只有扁平目录、无 PEP503 索引，uv 无法直接解析）：
+
+```bash
+uv pip install --no-index --no-deps --find-links D:\torch-wheels "torch==2.14.0+cu126"
 ```
 
 Linux 环境无需此步骤（PyPI 的 Linux torch 自带 CUDA）。
@@ -98,8 +111,8 @@ Linux 环境无需此步骤（PyPI 的 Linux torch 自带 CUDA）。
 | 变量                                          | 必要性   | 说明                                                                            |
 | --------------------------------------------- | -------- | ------------------------------------------------------------------------------- |
 | `DEEPSEEK_API_KEY`                            | 必填     | 回答生成模型                                                                    |
-| `LOCAL_LLM_BASE_URL`                          | 推荐     | 轻量任务模型端点（本地 vLLM 或云端 OpenAI 兼容端点）；不可用时自动降级 DeepSeek |
-| `OPENAI_API_KEY`                              | 评测需要 | RAGAS 裁判模型（GPT-4o 快照版）                                                 |
+| `LIGHT_LLM_BASE_URL`                          | 推荐     | 轻量任务模型端点（本地 vLLM 或云端 OpenAI 兼容端点）；不可用时自动降级 DeepSeek |
+| `JUDGE_MODEL` / `JUDGE_API_KEY`               | 评测需要 | RAGAS 裁判模型（默认 Qwen 日期快照版，走百炼；密钥缺省回退 `QWEN`）             |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 可选     | 配置后启用全链路追踪                                                            |
 | `ALERT_EMAIL_*`                               | 可选     | 高危上报邮件通知                                                                |
 
@@ -166,27 +179,33 @@ curl -X POST http://localhost:8080/chat \
 ## 模型训练（情绪检测）
 
 ```bash
-# 微调 XLM-RoBERTa（单卡 4090 约 25-50 分钟）
+# 微调 XLM-RoBERTa（本机 RTX 4070 Laptop + CUDA 版 torch 实测约 1 分钟 / 10 epoch）
 uv run python -m scripts.train_emotion_model --train data/eval/emotion_train.json
 
 # 验证高危召回率（> 95% 达标）
 uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json
 ```
 
-训练产出自动保存至 `models/emotion-xlmr`（`.env` 的 `EMOTION_MODEL_PATH`），无需额外配置。类别不平衡处理：高危样本 3
-倍损失权重 + 2 倍过采样，早停监控高危召回率而非整体准确率。
+训练产出自动保存至 `models/emotion-xlmr`（`.env` 的 `EMOTION_MODEL_PATH`），无需额外配置。
+
+类别不平衡处理：**逆频次类别权重**（`w_i = N/(K·n_i)`，随语料实际分布自适应）+ 高危样本 2 倍过采样。
+早期版本把"高危 ×3"写死在代码里，其前提是真实分布中高危不足 8%；
+语料刻意提高到 30% 后，写死的倍率与过采样叠加会让高危占约 55% 的损失质量、
+模型退化成"全部判高危"——因此改为按频次计算。
+语料不足 1500 条时默认**全量训练、固定轮数**（不切验证集）：100 条语料切出 20 条验证、
+其中高危仅 6 条，任何基于它的选优都是噪声驱动。
 
 ## 评测体系
 
-> **验证状态说明**：下表的数值均为**设计目标**，非已达成结果。
-> 情绪模型尚未训练（缺标注语料）、RAGAS 与红队测试尚未运行，
-> 因此这些指标目前无实测数据。
+> **验证状态**：v2 阶段一已把指标全部实测（详见 [docs/05-evidence.md](docs/05-evidence.md)）。
+> 下表第三列是**实测值**，不是设计目标。
 
-| 评测       | 命令                                                                          | 目标                                                                                                                                 |
-| ---------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| RAG 端到端 | `uv run python -m evaluation.ragas_eval --data data/eval/rag_eval.json`       | 五指标对照：context_precision > 0.80、context_recall > 0.75、faithfulness > 0.85、answer_relevancy > 0.85、answer_correctness > 0.80 |
-| 情绪检测   | `uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json` | 高危召回率 > 95%（硬性上线门槛，宁可误报不可漏报）                                                                                   |
-| 安全红队   | `uv run python -m evaluation.red_team`                                        | Prompt 注入 / 越界 / 诱导编造 / 隐私套取 / 情绪操纵 五类攻击，人工判定通过率 100%                                                    |
+| 评测       | 命令                                                                          | 实测（v2，2026-09-19）                                                                                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RAG 端到端 | `uv run python -m evaluation.ragas_eval --data data/eval/rag_eval.json`       | 100 条实测：faithfulness **0.9021** / answer_relevancy **0.7072** / context_precision **0.7869** / context_recall **0.8214** / answer_correctness **0.4628**；两项达标，**问题集中在排序**（裁判为百炼 `qwen3-max` 快照版） |
+| 情绪检测   | `uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json` | 高危召回率 **0%**（60 条评测集：18 条高危全漏报、**误报 0 次**）——该集全为隐晦表达，规则与微调模型都无从命中，**语义判别层缺位是当前短板**（接入见 v2-plan 阶段一 #9）；**95% 门槛未达，属已知未达标项**                    |
+| 切分对照   | `uv run python -m evaluation.chunk_experiment --data data/eval/rag_eval.json` | R@10：固定长度 0.75 / 统一递归 0.77 / **分类型 0.79（相对 +5.3%）**；设计文档里的"提升 12%"被实测推翻                                                                                                                       |
+| 安全红队   | `uv run python -m evaluation.red_team`                                        | ✅ **已人工判定（2026-09-19）**：30 条中 **28 通过 / 2 失败**——`privacy_05`（暴露内部存储/记忆机制）、`off_topic_06`（诱导功利选课）；修复项见 v2-plan 阶段二 #13                                                           |
 
 评测明细自动导出 `rag_eval_report.csv`（逐条 Bad Case 定位）；红队结果快照写入 `data/eval/red_team_results.json`（verdict
 字段回填人工判定）。
@@ -201,17 +220,18 @@ uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json
 
 ## 容错设计
 
-| 故障场景            | 系统行为                                             |
-| ------------------- | ---------------------------------------------------- |
-| DeepSeek API 不可用 | 自动切换轻量端点（Qwen2.5-14B）                      |
-| 轻量端点不可用      | 自动切换 DeepSeek，JSON 模式三级回退                 |
-| 情绪分类模型缺失    | 降级纯规则引擎（安全兜底网仍在线）                   |
-| PostgreSQL 不可达   | 降级无记忆模式（调用方传入历史补偿）                 |
-| Milvus 异常         | 返回空结果集，生成节点明确答复「无法确定」           |
-| FAQ 校验调用失败    | 信任 0.85 阈值直返标准答案（增强层故障不拖垮快路径） |
-| 关怀后缀生成失败    | 降级固定模板（中英双套，渠道信息来自配置而非模型）   |
-| 意图路由失败        | 按简单问答处理 + 原始 query 检索 + 沿用既有语言偏好  |
-| 质量评估连续不合格  | 最多重试 2 次后强制放行（防死循环）                  |
+| 故障场景               | 系统行为                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| DeepSeek API 不可用    | 自动切换轻量端点（Qwen）                                                          |
+| 轻量端点不可用         | 自动切换 DeepSeek，JSON 模式三级回退                                              |
+| **云端端点全部不可用** | **由本地模型接管轻量任务**（Ollama + Qwen2.5-7B，可选启用），恢复真正的离线可用性 |
+| 情绪分类模型缺失       | 降级纯规则引擎（安全兜底网仍在线）                                                |
+| PostgreSQL 不可达      | 降级无记忆模式（调用方传入历史补偿）                                              |
+| Milvus 异常            | 返回空结果集，生成节点明确答复「无法确定」                                        |
+| FAQ 校验调用失败       | 信任 0.85 阈值直返标准答案（增强层故障不拖垮快路径）                              |
+| 关怀后缀生成失败       | 降级固定模板（中英双套，渠道信息来自配置而非模型）                                |
+| 意图路由失败           | 按简单问答处理 + 原始 query 检索 + 沿用既有语言偏好                               |
+| 质量评估连续不合格     | 最多重试 2 次后强制放行（防死循环）                                               |
 
 ## 项目结构
 
@@ -232,23 +252,24 @@ XiaoDan-Da/
 │   └── nodes/                    #   11 个节点实现
 ├── knowledge_base/               # 模块一：知识库引擎
 │   ├── crawler/                  #   官网增量爬虫
-│   ├── preprocessing/            #   解析 / 清洗 / 分类型切分
+│   ├── preprocessing/            #   解析 / 清洗 / 分类型切分（corpus.py：带缓存的语料管线）
 │   ├── indexing/                 #   BGE-M3 向量化 / Milvus 建表
 │   ├── retrieval.py              #   混合检索 + RRF 融合 + 重排
 │   └── faq.py                    #   FAQ 高置信度专用索引
 ├── emotion/                      # 模块二：情绪检测引擎
 │   ├── rule_engine.py            #   规则引擎（正则 + 多轮累积）
 │   ├── classifier.py             #   XLM-RoBERTa 分类器
-│   ├── detector.py               #   两层融合入口
+│   ├── detector.py               #   两层融合入口（含模型置信度门槛）
 │   └── reporting.py              #   脱敏上报（写库 + 邮件）
 ├── evaluation/                   # 模块四：评估
 │   ├── ragas_eval.py             #   RAGAS 五指标端到端评测
-│   ├── emotion_eval.py           #   情绪混淆矩阵 + 高危召回率
+│   ├── emotion_eval.py           #   情绪混淆矩阵 + 高危召回率 + 判定来源拆解
+│   ├── chunk_experiment.py       #   切分策略对照实验（Recall@10）
 │   └── red_team.py               #   安全红队测试（30 用例）
 ├── observability/                # Langfuse 全链路追踪（开关式）
 ├── deployment/                   # 模块五：FastAPI 服务 + Dockerfile
-├── scripts/                      # 索引构建 / 情绪模型训练
-├── tests/                        # 单元测试（33 项，无外部依赖）
+├── scripts/                      # 索引构建 / 语料与评测集合成 / 情绪模型训练
+├── tests/                        # 单元测试（46 项，无外部依赖）
 └── data/                         # 数据目录（结构见"数据准备"）
 ```
 
@@ -260,4 +281,4 @@ uv run pytest tests/ -v
 
 覆盖规则引擎、切分策略、文本清洗、两层降级、FAQ 校验信任策略、关怀后缀分级、
 条件路由、意图兜底与语言偏好、学期计算、JSON 解析等核心逻辑，
-不依赖任何外部服务（LLM / 数据库 / 向量库），33 项全部通过。
+不依赖任何外部服务（LLM / 数据库 / 向量库），46 项全部通过。

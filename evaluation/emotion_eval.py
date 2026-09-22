@@ -41,11 +41,13 @@ def load_eval_data(path: str) -> list:
         return json.load(file)
 
 
-def run_emotion_eval(y_true: list, y_pred: list) -> dict:
-    """执行情绪检测评测并输出三份报告。
+def run_emotion_eval(y_true: list, y_pred: list, sources: list) -> dict:
+    """执行情绪检测评测并输出五份报告。
 
     :param y_true: 真实标签列表
     :param y_pred: 预测标签列表
+    :param sources: 每条样本的判定来源（规则引擎 / 分类模型 / 规则+模型融合），
+        由 detector 返回；用于把"高危召回率"拆成两层各自的贡献
     :return: {"high_risk_recall", "passed"}，passed 为是否达到上线标准
     """
     # 1. 整体分类报告（逐类的 precision / recall / f1）
@@ -75,7 +77,21 @@ def run_emotion_eval(y_true: list, y_pred: list) -> dict:
     )
     print(f"\n被漏报的高危样本数: {missed}（最严重的错误类型）")
 
-    return {"high_risk_recall": high_risk_recall, "passed": passed}
+    # 5. 高危命中的来源拆解：区分"规则拦下的"与"模型认出来的"
+    # 这个拆分直接决定召回率怎么被解读——若高危全部由规则命中，
+    # 说明评测集里的表达是显式的，模型是否有效并未被验证；
+    # 反之若几乎全部来自分类模型，说明模型确实补上了规则覆盖不到的隐晦表达
+    high_risk_source_stats: dict = {}
+    for truth, source in zip(y_true, sources):
+        if truth == "高危":
+            high_risk_source_stats[source] = high_risk_source_stats.get(source, 0) + 1
+    print(f"高危样本的判定来源: {high_risk_source_stats or '无高危样本'}")
+
+    return {
+        "high_risk_recall": high_risk_recall,
+        "passed": passed,
+        "high_risk_source_stats": high_risk_source_stats,
+    }
 
 
 def main(eval_data_path: str) -> dict:
@@ -91,12 +107,14 @@ def main(eval_data_path: str) -> dict:
 
     y_true: list = []
     y_pred: list = []
+    sources: list = []
     for entry in eval_data:
         detection = detect_emotion(entry["text"])
         y_true.append(entry["label"])
         y_pred.append(detection["level"])
+        sources.append(detection["source"])
 
-    return run_emotion_eval(y_true, y_pred)
+    return run_emotion_eval(y_true, y_pred, sources)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,6 @@ faq.json 格式（数组，每项一个问答条目）：
 
 import json
 import os
-import re
 import sys
 
 from config.settings import get_current_semester
@@ -50,25 +49,7 @@ from knowledge_base.indexing.milvus_client import (
     insert_chunks,
 )
 from knowledge_base.preprocessing.chunker import chunk_by_type
-from knowledge_base.preprocessing.cleaner import INVISIBLE_CHAR_RE, clean_text
-from knowledge_base.preprocessing.parser import elements_to_text, parse_document
-
-# 支持的文档扩展名：白名单之外的内容不进入管线。
-# 必须与爬虫的 ATTACHMENT_RE 保持一致——爬虫下载了但此处不认的格式会被静默忽略，
-# 形成「文件躺在 data/raw 里却永远进不了索引」的隐蔽缺口
-SUPPORTED_EXTENSIONS: tuple = (".pdf", ".html", ".htm", ".doc", ".docx", ".txt", ".md")
-
-# 通知类 txt 的元数据头部行模式：【键】值
-# 适用对象 / 生效学期 由爬虫写入，是检索侧人群过滤与时效过滤的唯一依据，
-# 必须在此解析出来，否则 build_filter_expr 的过滤条件永远筛不掉任何文档
-NOTICE_META_RE = re.compile(r"^【(标题|发布日期|原文链接|适用对象|生效学期)】(.*)$")
-
-# 爬虫下载的附件文件名形如「通知标题_1a2b3c4d.pdf」，尾部 8 位哈希用于避免同名冲突。
-# 无元数据头部的文件以文件名作为标题，需剥掉这段哈希，否则标题会带上无意义后缀
-ATTACHMENT_HASH_SUFFIX_RE = re.compile(r"_[0-9a-f]{8}$")
-
-# 目录名 → doc_type 映射；未命中的目录一律按"手册"策略处理
-DOC_TYPE_BY_DIR: dict = {"手册": "手册", "通知": "通知", "表格": "表格"}
+from knowledge_base.preprocessing.corpus import iter_document_records
 
 
 def build(data_dir: str) -> None:
@@ -91,35 +72,22 @@ def build(data_dir: str) -> None:
         print(f"[build_index] FAQ 索引已写入 {row_count} 行（含相似问法）")
 
     # 第三步：通用知识库（按 doc_type 分目录批量处理）
+    # 解析链路由 knowledge_base.preprocessing.corpus 统一提供：
+    # 它同时被评测集合成脚本与切分对照实验复用，保证三处看到的 chunk 逐字一致
+    # （评测集记录的"来源 chunk"必须能在索引里找到），且解析结果带磁盘缓存，
+    # 重跑建库不必再花几十分钟重新解析 PDF
+    records, failed_files = iter_document_records(data_dir)
+
     total_chunks = 0
-    failed_files: list = []
-    for dir_name in sorted(os.listdir(data_dir)) if os.path.isdir(data_dir) else []:
-        sub_dir = os.path.join(data_dir, dir_name)
-        if not os.path.isdir(sub_dir):
-            continue
-
-        doc_type = DOC_TYPE_BY_DIR.get(dir_name, "手册")
+    for dir_name in sorted({record["topic_tag"] for record in records}):
         doc_chunks: list = []
-
-        for file_name in sorted(os.listdir(sub_dir)):
-            file_path = os.path.join(sub_dir, file_name)
-            if not os.path.isfile(file_path) or not file_name.lower().endswith(
-                SUPPORTED_EXTENSIONS
-            ):
-                continue
-            # 单文件失败不中断整批：建库耗时以小时计，一个损坏或不受支持的 PDF
-            # 不应该让前面已解析的成果全部作废（失败文件在末尾统一汇总）
-            try:
-                doc_chunks.extend(_process_file(file_path, doc_type, dir_name))
-            except Exception as file_error:
-                failed_files.append(
-                    (file_name, f"{type(file_error).__name__}: {file_error}")
+        for record in records:
+            if record["topic_tag"] == dir_name:
+                doc_chunks.extend(
+                    chunk_by_type(
+                        record["text"], record["doc_type"], record["metadata"]
+                    )
                 )
-                print(
-                    f"[build_index] 跳过（解析失败）{file_name}: "
-                    f"{type(file_error).__name__}: {str(file_error)[:120]}"
-                )
-
         if doc_chunks:
             vectors = get_embedder().encode([chunk["text"] for chunk in doc_chunks])
             insert_chunks(doc_chunks, vectors)
@@ -135,86 +103,6 @@ def build(data_dir: str) -> None:
         f"[build_index] 当前学期: {get_current_semester()}，"
         f"时效性过滤将匹配该学期与「长期有效」的文档"
     )
-
-
-def _process_file(file_path: str, doc_type: str, topic_tag: str) -> list:
-    """处理单个文档文件：解析 → 清洗 → 元数据提取 → 分类型切分。
-
-    :param file_path: 文档路径
-    :param doc_type: 文档类型（由所在目录名决定）
-    :param topic_tag: 主题标签（由顶层目录名决定，用于管理后台分类）
-    :return: chunk 列表 [{"text", "metadata"}, ...]
-    """
-    file_name = os.path.basename(file_path)
-
-    # 通知类 txt 先解析头部元数据（爬虫产出的【标题】【发布日期】等）
-    header_meta: dict = {}
-    body_text: str
-    if doc_type == "通知" and file_name.endswith(".txt"):
-        header_meta, body_text = _parse_notice_file(file_path)
-    else:
-        # 固定使用 fast 策略：本次入库的都是文本型 PDF（制度文档、培养方案）。
-        # 不能沿用默认的 "auto" —— 它对扫描件/图片型 PDF 会自动转 OCR 分支，
-        # 而 OCR 依赖外部二进制 poppler，未安装时直接抛 PDFInfoNotInstalledError
-        # 中断整个建库。fast 对图片型 PDF 只会产出较少文本，不会失败
-        elements = parse_document(file_path, strategy="fast")
-        body_text = elements_to_text(elements)
-
-    cleaned = clean_text(body_text)
-
-    # 元数据默认值：手动上传文档默认全员可见、长期有效；
-    # 爬虫产出的通知带【适用对象】【生效学期】头部，优先采用头部值
-    metadata: dict = {
-        "source_url": header_meta.get("原文链接", "manual_upload"),
-        "doc_type": doc_type,
-        "topic_tag": topic_tag,
-        "target_audience": header_meta.get("适用对象", "全部"),
-        "valid_semester": header_meta.get("生效学期", "长期有效"),
-        "publish_date": header_meta.get("发布日期", ""),
-        "language": "zh",
-        "title": header_meta.get("标题") or _title_from_filename(file_name),
-    }
-
-    return chunk_by_type(cleaned, doc_type, metadata)
-
-
-def _title_from_filename(file_name: str) -> str:
-    """从文件名推导文档标题（无元数据头部的文件，如爬虫下载的附件）。
-
-    依次剥掉扩展名、爬虫附加的去重哈希后缀，以及标题本身可能残留的文档后缀
-    与零宽字符，最终得到干净的通知标题。
-    """
-    stem = INVISIBLE_CHAR_RE.sub("", os.path.splitext(file_name)[0])
-    stem = ATTACHMENT_HASH_SUFFIX_RE.sub("", stem)
-    # 标题自带扩展名的情形（如「…培养方案（医学）.pdf_1a2b3c4d.pdf」）再剥一层
-    return (
-        os.path.splitext(stem)[0]
-        if os.path.splitext(stem)[1].lower() in SUPPORTED_EXTENSIONS
-        else stem
-    )
-
-
-def _parse_notice_file(file_path: str) -> tuple:
-    """解析通知类 txt 的元数据头部，返回 (元数据, 正文)。
-
-    头部行格式：【标题】xxx / 【发布日期】xxx / 【原文链接】xxx，
-    首个空行之后的内容视为正文。
-    """
-    with open(file_path, encoding="utf-8") as file:
-        lines = file.read().split("\n")
-
-    meta: dict = {}
-    body_start = 0
-    for i, line in enumerate(lines):
-        matched = NOTICE_META_RE.match(line.strip())
-        if matched:
-            meta[matched.group(1)] = matched.group(2).strip()
-        elif line.strip() == "" and meta:
-            body_start = i + 1  # 元数据头部后的首个空行是正文起点
-            break
-
-    body = "\n".join(lines[body_start:])
-    return meta, body
 
 
 if __name__ == "__main__":

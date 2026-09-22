@@ -11,7 +11,7 @@
 4. Reranker 以原始问题为锚做全局重排，取 top8
    （比简单问答的 top5 略宽：复杂问题需要更多素材做综合）
 """
-from agent.llm_clients import chat_qwen_json, parse_json_response
+from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
 from agent.nodes.retrieve import build_filter_expr
 from agent.state import AgentState
 from config.settings import settings
@@ -75,6 +75,6 @@ def _decompose(query: str) -> list:
         sub_queries = parse_json_response(raw)["sub_queries"]
         if isinstance(sub_queries, list) and sub_queries:
             return [str(sq) for sq in sub_queries]
-    except (ValueError, KeyError, TypeError) as parse_error:
+    except (ValueError, KeyError, TypeError, LLMUnavailableError) as parse_error:
         print(f"[plan_and_retrieve] 子查询拆解失败，按单查询处理: {parse_error}")
     return [query]

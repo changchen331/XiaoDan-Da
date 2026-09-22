@@ -32,20 +32,44 @@ class Settings:
         os.getenv("DEEPSEEK_TIMEOUT", "30")
     )  # 生成环节 30 秒超时
 
-    # 轻量任务模型（Qwen2.5-14B）：意图路由 / 质量评估 / Query 改写 / 摘要。
-    # base_url 可指向本地 vLLM，也可指向任意 OpenAI 兼容的云端端点（如 SiliconFlow），
-    # 端点不可用时轻量任务自动降级到 DeepSeek，保证任何环境都能完整跑通流程。
-    LOCAL_LLM_BASE_URL: str = os.getenv(
-        "LOCAL_LLM_BASE_URL", "http://localhost:8000/v1"
+    # 轻量任务模型：意图路由 / 质量评估 / Query 改写 / 摘要 / FAQ 校验。
+    #
+    # 命名说明（重要）：这组变量**描述用途，不描述部署位置**。
+    # 早先叫 LOCAL_LLM_*，但 base_url 实际指向云端兼容端点（百炼），
+    # 名字与语义脱节——和"规则引擎输出'中度'、状态白名单却只认'中度困扰'"是同一类问题：
+    # 名称一旦与实际不符，后人就会按名字去理解，从而误判架构。
+    # 端点可指向本地推理服务，也可指向任意 OpenAI 兼容云端端点。
+    # 注意：本组是**主用端点**，失败后的兜底见下方 FALLBACK_LLM_*。
+    LIGHT_LLM_BASE_URL: str = os.getenv(
+        "LIGHT_LLM_BASE_URL", "http://localhost:8000/v1"
     )
-    # 密钥来源：优先 LOCAL_LLM_API_KEY，缺失时回退同名系统变量 QWEN（同上）
-    LOCAL_LLM_API_KEY: str = os.getenv("LOCAL_LLM_API_KEY") or os.getenv(
+    # 密钥来源：优先 LIGHT_LLM_API_KEY，缺失时回退同名系统变量 QWEN（同上）
+    LIGHT_LLM_API_KEY: str = os.getenv("LIGHT_LLM_API_KEY") or os.getenv(
         "QWEN", "dummy"
     )
-    LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
-    LOCAL_LLM_TIMEOUT: int = int(
-        os.getenv("LOCAL_LLM_TIMEOUT", "15")
+    LIGHT_LLM_MODEL: str = os.getenv("LIGHT_LLM_MODEL", "qwen-plus")
+    LIGHT_LLM_TIMEOUT: int = int(
+        os.getenv("LIGHT_LLM_TIMEOUT", "15")
     )  # 轻量任务 15 秒超时
+
+    # 本地兜底模型：**仅当云端端点全部不可用时**接管轻量任务。
+    #
+    # 存在的意义是恢复"真正的离线可用性"——当前主用端点与降级端点（DeepSeek）
+    # 都在云端，断网即全挂。模型选型待定，故默认关闭；
+    # 选定后填入 FALLBACK_LLM_MODEL 并置 FALLBACK_LLM_ENABLED=true 即可生效。
+    #
+    # 本组**描述位置（本地）+ 角色（兜底）**，与 LIGHT_LLM_* 的命名维度不同，这是有意为之。
+    FALLBACK_LLM_ENABLED: bool = (
+        os.getenv("FALLBACK_LLM_ENABLED", "false").lower() == "true"
+    )
+    FALLBACK_LLM_BASE_URL: str = os.getenv(
+        "FALLBACK_LLM_BASE_URL", "http://localhost:11434/v1"
+    )  # 默认指向 Ollama 的 OpenAI 兼容端点
+    FALLBACK_LLM_API_KEY: str = os.getenv("FALLBACK_LLM_API_KEY", "ollama")
+    FALLBACK_LLM_MODEL: str = os.getenv("FALLBACK_LLM_MODEL", "")
+    FALLBACK_LLM_TIMEOUT: int = int(
+        os.getenv("FALLBACK_LLM_TIMEOUT", "60")
+    )  # 本地量化模型首 token 较慢，超时给宽
 
     # ==================== 模块一：知识库 ====================
 
@@ -81,6 +105,16 @@ class Settings:
         "中度困扰",
         "高危",
     )  # 标签顺序即模型类别 id 顺序
+    # 模型结论被采纳的门槛（两个用途，同一个值）：
+    # ① 融合升级：规则判中度 + 模型高危概率超此值 → 升级为高危
+    # ② 模型独立判定的总门槛：模型最高概率不超过此值时，其输出视为"四类近乎均匀、
+    #    不构成证据"，一律以规则引擎为准。
+    #    v2 实测（100 条语料训出的模型）：普通事务性提问的高危概率 0.25–0.30、
+    #    真实高危样本 0.28–0.42，**两者几乎完全重叠**——即模型对高危没有区分度。
+    #    若不加这道门槛，argmax 会把 95% 的普通提问判为高危，整条问答链路被劫持
+    #    （实测 100 条评测问题有 96 条没走到检索）。
+    # 因此本阈值当前的实际含义是：**模型侧暂不承担高危判定，安全网由规则引擎兜底**。
+    # v3 语料扩到 1500 条后需重新标定该值（届时模型概率才会有区分度）。
     HIGH_RISK_PROB_THRESHOLD: float = float(
         os.getenv("HIGH_RISK_PROB_THRESHOLD", "0.5")
     )
@@ -127,9 +161,23 @@ class Settings:
 
     # ==================== 模块四：评估与可观测 ====================
 
-    # RAGAS 裁判模型：GPT-4o 快照版本（版本锁定保证分数跨迭代可比），与生成模型跨族去偏
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "gpt-4o-2024-08-06")
+    # RAGAS 裁判模型（LLM-as-a-Judge）：与生成模型（DeepSeek）跨族去偏，
+    # 且**必须用带日期后缀的快照版本**——模型静默升级会让 v2/v3 的评测分数不可比，
+    # 而纵向可复现性正是这套离线评测存在的意义。
+    #
+    # 选型理由（在百炼 255 个模型中的取舍）：
+    # - 不选非 Qwen 的第三方族（GLM / Kimi）：经 API 实查，只有 Qwen 提供日期快照；
+    #   Kimi 另有硬伤——temperature 只接受 1，与「裁判必须 temperature=0」冲突
+    # - 不选 Qwen 旗舰 qwen3.7-max：实测 6.6s vs 1.7s，100 条 × 5 指标差一个数量级耗时
+    # - 因此选 qwen3-max-2026-01-23：快照锁定 + 实测最快 + 与在线质检同族（口径对齐）
+    # - 残余的自我偏好风险有限：主答案为 DeepSeek 生成，裁判 Qwen 对它并不自评
+    JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "qwen3-max-2026-01-23")
+    JUDGE_BASE_URL: str = os.getenv(
+        "JUDGE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    # 裁判密钥：优先 JUDGE_API_KEY，缺失时回退系统变量 QWEN
+    # （与上方 DEEPSEEK/LIGHT_LLM 的「优先项目变量名、再回退系统变量」读取顺序一致）
+    JUDGE_API_KEY: str = os.getenv("JUDGE_API_KEY") or os.getenv("QWEN", "")
 
     # Langfuse 全链路追踪（开关式）：公钥私钥都配置时启用，否则所有追踪函数为空操作
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")

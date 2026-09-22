@@ -43,7 +43,7 @@ from agent.nodes.emotion_detect import route_after_emotion
 from agent.nodes.intent_route import route_after_intent
 from agent.nodes.quality_check import route_after_quality
 from agent.nodes.retrieve import route_after_retrieve
-from agent.state import AgentState
+from agent.state import AgentState, EmotionResult, IntentResult, QualityResult
 from config.settings import settings
 from observability.tracing import get_langgraph_callbacks
 
@@ -53,6 +53,25 @@ _checkpointer = None
 _checkpointer_initialized = False
 # 编译后的图应用（含节点与边的一次性构建产物，线程安全可复用）
 _compiled_app = None
+
+
+def _build_state_serde():
+    """构造 Checkpointer 的序列化器，显式登记状态里的自定义类型。
+
+    为什么必须显式登记：状态里存的是 pydantic 对象，反序列化时 langgraph 需要
+    按类型名 import 对应的类。默认行为是「警告但放行」，并明确说明
+    **未来版本会直接阻断**——不登记就是一个定时的升级炸弹（见 T28）。
+
+    附带收益：登记后反序列化范围被收窄为「这三类 + langgraph 内置安全类型」，
+    而不是默认的「全部放行」，缩小了从检查点数据触发代码导入的面。
+
+    新增状态模型时记得同步加到这里，否则日志会再次出现 unregistered 警告。
+    """
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    return JsonPlusSerializer(
+        allowed_msgpack_modules=[EmotionResult, IntentResult, QualityResult]
+    )
 
 
 def _get_checkpointer():
@@ -76,7 +95,7 @@ def _get_checkpointer():
             # autocommit=True 是 setup() 的硬性要求：其中包含
             # CREATE INDEX CONCURRENTLY，该语句不允许在事务块内执行
             connection = psycopg.connect(settings.postgres_dsn, autocommit=True)
-            checkpointer = PostgresSaver(connection)
+            checkpointer = PostgresSaver(connection, serde=_build_state_serde())
             checkpointer.setup()
             _checkpointer = checkpointer
         except Exception as db_error:

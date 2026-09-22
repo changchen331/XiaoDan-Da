@@ -8,7 +8,7 @@
 无论质量如何直接放行——第 3 次生成仍不合格时，
 一条"不够完美但可用"的回答远优于无限循环或空响应。
 """
-from agent.llm_clients import chat_qwen_json, parse_json_response
+from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
 from agent.state import AgentState, QualityResult
 from config.settings import settings
 
@@ -58,9 +58,10 @@ def quality_check(state: AgentState) -> dict:
             score=float(result["score"]),
             reason=str(result["reason"]),
         )
-    except (ValueError, KeyError, TypeError) as parse_error:
+    except (ValueError, KeyError, TypeError, LLMUnavailableError) as parse_error:
         # 评估自身失败时放行：不能因质检组件故障阻塞回答
-        print(f"[quality_check] 质量评估解析失败，放行: {parse_error}")
+        # （含降级链耗尽：两端点同时故障时也必须放行，而非抛异常中断整轮）
+        print(f"[quality_check] 质量评估失败，放行: {parse_error}")
         quality = QualityResult(passed=True, score=0.5, reason=f"评估异常放行: {parse_error}")
 
     if not quality.passed:

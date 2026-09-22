@@ -43,9 +43,13 @@ docs/
 logs/
 *.log
 rag_eval_report.csv
-outputs/                  # Trainer 训练中间产物 (最优权重另存 models/)
+# Trainer 训练中间产物（最优权重另存 models/）
+# 注意：注释必须独占一行——git 不支持行内注释，写成 `outputs/  # 说明`
+# 会被当成字面模式匹配，规则实际不生效（v2 实测发现，原写法确实没生效）
+outputs/
 .pytest_cache/
-hf_cache/                 # HuggingFace 模型下载缓存 (Docker 挂载目录)
+# HuggingFace 模型下载缓存（Docker 挂载目录）
+hf_cache/
 .vscode/
 
 # ===== 中间件本地存储 =====

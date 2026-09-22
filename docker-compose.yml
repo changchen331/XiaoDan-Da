@@ -9,9 +9,9 @@
 #     docker compose --profile observability up -d
 #     → 追加 Langfuse 追踪面板（3000 端口，需在 .env 配置 keys）
 #
-# 说明：轻量任务模型（Qwen2.5-14B）通过 .env 的 LOCAL_LLM_BASE_URL
-# 接入外部 OpenAI 兼容端点（本地 vLLM 或云端 API），
-# 端点不可用时自动降级 DeepSeek，因此不放入本编排。
+# 说明：轻量任务模型通过 .env 的 LIGHT_LLM_BASE_URL 接入外部 OpenAI 兼容端点
+# （云端 API 或本地推理服务），不可用时依次降级 DeepSeek → 本地兜底模型
+# （FALLBACK_LLM_*），因此这些端点均不放入本编排。
 # ============================================================
 services:
   # ---------- Milvus 依赖：etcd（元数据） ----------
@@ -97,10 +97,16 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       DEEPSEEK_TIMEOUT: ${DEEPSEEK_TIMEOUT:-30}
-      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8000/v1}
-      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-dummy}
-      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
-      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-15}
+      LIGHT_LLM_BASE_URL: ${LIGHT_LLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      LIGHT_LLM_API_KEY: ${LIGHT_LLM_API_KEY:-dummy}
+      LIGHT_LLM_MODEL: ${LIGHT_LLM_MODEL:-qwen-plus}
+      LIGHT_LLM_TIMEOUT: ${LIGHT_LLM_TIMEOUT:-15}
+      # 本地兜底模型：容器内访问宿主机需用 host.docker.internal
+      FALLBACK_LLM_ENABLED: ${FALLBACK_LLM_ENABLED:-false}
+      FALLBACK_LLM_BASE_URL: ${FALLBACK_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      FALLBACK_LLM_API_KEY: ${FALLBACK_LLM_API_KEY:-ollama}
+      FALLBACK_LLM_MODEL: ${FALLBACK_LLM_MODEL:-}
+      FALLBACK_LLM_TIMEOUT: ${FALLBACK_LLM_TIMEOUT:-60}
       # ===== 嵌入 / 重排模型 =====
       EMBED_MODEL_NAME: ${EMBED_MODEL_NAME:-BAAI/bge-m3}
       RERANK_MODEL_NAME: ${RERANK_MODEL_NAME:-BAAI/bge-reranker-v2-m3}

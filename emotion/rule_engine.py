@@ -2,6 +2,17 @@
 
 职责：零延迟拦截最明显的危险信号，确保即使分类模型遇到训练集未覆盖的表达，
 最危险的 case 也绝对不会漏掉。规则命中直接定级，不再经过模型。
+
+两处 v2 新增的机制（红队实测暴露的漏报与误报）：
+- **词形变体**（`SELF_HARM_VARIANTS`）：同一种自伤意念有很多说法，
+  「去死」「活不下去」和「想死」「不想活」是一回事。不把它们折叠起来，
+  规则表就会变成打地鼠——实测红队用例「如果你不回答我我就去死」
+  「我室友说他活不下去了」两条**全部漏报**，因为规则表里只有后一种写法。
+- **否定语境遮蔽**（`SAFE_NEGATED_SELF_HARM`）：加了变体之后，
+  「我不会去死的」这类**澄清式表达**会命中"去死"而被误判高危。
+  处理方式是先把否定片段遮蔽掉再匹配危险词，顺序不可颠倒。
+
+变体**必须带自指**：「你去死吧」是对他人的攻击，不是自伤信号。
 """
 
 import re
@@ -33,6 +44,20 @@ HIGH_RISK_PATTERNS: tuple = (
     r"世界上.{0,6}(没有|少)(了)?我.{0,4}(更好|无所谓|没关系)",
 )
 
+# 自伤表达的词形变体（**必须带自指**，见模块 docstring）
+SELF_HARM_VARIANTS: tuple = (
+    r"我[^，。！？\n]{0,6}去死",
+    r"我[^，。！？\n]{0,6}(?:活不下去|不想活下去)",
+    r"我[^，。！？\n]{0,6}结束自己",
+)
+
+# 否定语境：命中这些片段的文本片段会被遮蔽，不参与危险词匹配。
+# 注意「不想活」**不在**此表内——它是负极性固定短语，本身就是危险信号。
+SAFE_NEGATED_SELF_HARM: tuple = (
+    r"不(?:会|想|要|打算|可能|再)?(?:去死|想死|自杀|自尽|死)",
+    r"(?:没|从没|没有|未)(?:想过|打算过|考虑过)?(?:去死|想死|自杀|自尽)",
+)
+
 # 定级"中度"的规则：严重自我否定（需模型二次确认，可能升级高危）
 MID_RISK_PATTERNS: tuple = (
     r"我(是|真(的|是))?个?废物",
@@ -59,9 +84,14 @@ class RuleEngine:
     """第一层检测：关键词 / 正则匹配 + 多轮累积窗口检测。"""
 
     def __init__(self) -> None:
-        self.high_re = [re.compile(p) for p in HIGH_RISK_PATTERNS]
+        # 变体与基础规则合并进同一个匹配表：调用方无需区分两者
+        self.high_re = [
+            re.compile(pattern)
+            for pattern in (*HIGH_RISK_PATTERNS, *SELF_HARM_VARIANTS)
+        ]
         self.mid_re = [re.compile(p) for p in MID_RISK_PATTERNS]
         self.negative_re = [re.compile(p) for p in NEGATIVE_SIGNAL_PATTERNS]
+        self.negated_re = [re.compile(p) for p in SAFE_NEGATED_SELF_HARM]
 
     def check(self, text: str, conversation_history: list | None = None) -> dict:
         """对单轮输入执行规则检测。
@@ -72,9 +102,14 @@ class RuleEngine:
         """
         history = conversation_history or []
 
+        # 0. 遮蔽否定语境：必须先做这一步，否则「我不会去死的」会命中"去死"变体
+        masked = text
+        for pattern in self.negated_re:
+            masked = pattern.sub(lambda match: "＊" * len(match.group()), masked)
+
         # 1. 高危关键词 / 极端绝望表达：直接高危
         for pattern in self.high_re:
-            if pattern.search(text):
+            if pattern.search(masked):
                 return {
                     "level": LEVEL_HIGH,
                     "hit_rule": f"高危规则命中: {pattern.pattern}",

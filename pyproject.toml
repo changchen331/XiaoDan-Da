@@ -32,9 +32,15 @@ dependencies = [
     "datasets>=2.19.0",
     "scikit-learn>=1.4.0",                    # 评测混淆矩阵 / 训练集切分
     # ===== 模块四：评估与可观测 =====
-    "ragas>=0.1.9",                           # RAG 五指标评测
+    "ragas>=0.4.3",                           # RAG 五指标评测
     "langchain-openai>=0.1.0",                # RAGAS 裁判模型的 LangChain 封装
     "langchain-huggingface>=0.0.3",           # RAGAS 本地 embedding
+    # 必须限制上界：0.4.2 移除了 langchain_community.chat_models.vertexai 与
+    # llms.VertexAI，而 ragas（至 0.4.3）仍在 llms/base.py 顶层 import 这两个符号，
+    # 导致 import ragas 直接 ModuleNotFoundError。
+    # 0.4.1 两者俱在，且其 langchain-core>=1.0.1,<2.0.0 与 langgraph 所要求的
+    # langchain-core 1.x 兼容——因此锁在 0.4.1 是唯一不用回滚编排层的解。
+    "langchain-community>=0.4.1,<0.4.2",
     "pandas>=2.0.0",                          # 评测明细导出
     "langfuse>=2.27.0",                       # 全链路追踪（开关式，未配置 keys 不生效）
     # ===== 模块五：服务化 =====
@@ -47,6 +53,7 @@ dependencies = [
     # 已被移除，且 uv 创建的虚拟环境默认不含 setuptools，不声明会直接 ImportError
     "setuptools<81",
     "psycopg[binary]>=3.2",
+    "langchain-community>=0.4.1,<0.4.2",
 ]
 
 # 开发依赖（uv sync 默认安装，Docker 镜像构建用 --no-dev 跳过）
@@ -60,6 +67,29 @@ dev = [
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
+
+# PyTorch CUDA 构建源：默认 index（PyPI / 阿里云镜像）只提供 CPU 版 torch，
+# 而本机是 RTX 4070 Laptop（compute capability 8.9 / Ada Lovelace），
+# 需要 CUDA 构建才能让 BGE-Reranker 走 GPU
+# （实测：CPU 构建下单次检索 25–33s，CUDA 构建 5.1s）。
+# 版本与通道选择：保持 torch 版本号不变（2.14.0），只换构建变体，把回归面压到最小；
+# 选 cu126 而非更新的 cu130，是因为前者与 FlagEmbedding / transformers /
+# unstructured-inference 等生态组件的兼容面更广（本机驱动 616.92 远超其要求）。
+#
+# ⚠ 本机实测该源不可用：download.pytorch.org 在国内网络仅约 0.35 MB/s 且丢包，
+#    拉 2.42 GiB 的 wheel 需两小时以上。实际走的是"手动下 wheel 再本地安装"：
+#      uv pip install --no-index --no-deps --find-links <wheel目录> "torch==2.14.0+cu126"
+#    （wheel 取自 mirrors.aliyun.com/pytorch-wheels/cu126/，实测快 3.5 倍；
+#      该镜像只有扁平目录、无 PEP503 索引，uv 无法直接解析，故不能配成 index）
+#    保留下方 index 声明是为了让网络条件好的环境能一条命令装好 CUDA 版。
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
 
 [tool.uv]
 # 本项目是脚本集合（python main.py / uvicorn deployment.api:app），

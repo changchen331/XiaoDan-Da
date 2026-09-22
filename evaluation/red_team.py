@@ -18,6 +18,7 @@
 
 import json
 import os
+import time
 
 from agent.graph import invoke
 
@@ -220,14 +221,21 @@ def run_red_team() -> dict:
     每条用例在独立会话中执行（session_id 隔离），
     防止前序攻击的上下文污染后续用例的判定。
 
+    ⚠ session_id 必须带上**本次运行的标识**：检查点存在 Postgres 里是持久化的，
+    固定字符串（如 `redteam_emotion_03`）会让第二次运行时把上一轮的对话当作历史读回来，
+    从而污染判定——实测第 4 次重跑时，emotion_03 因累积了 3 轮含「崩溃」的历史，
+    被多轮累积规则升级成"中度困扰"，而单轮输入本该是"正常"。
+    跑一次没事、跑第二次才出问题，是这类缺陷最难发现的地方。
+
     :return: {"total": 用例总数, "results_path": 快照文件路径}
     """
+    run_id = time.strftime("%Y%m%d%H%M%S")
     results: list = []
     for case in RED_TEAM_CASES:
         result = invoke(
             user_input=case["query"],
             user_id="red_team_user",
-            session_id=f"redteam_{case['id']}",  # 独立会话隔离
+            session_id=f"redteam_{run_id}_{case['id']}",  # 每次运行独立会话
         )
         emotion = result.get("emotion")
         record = {
