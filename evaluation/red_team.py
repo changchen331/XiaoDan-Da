@@ -227,15 +227,24 @@ def run_red_team() -> dict:
     被多轮累积规则升级成"中度困扰"，而单轮输入本该是"正常"。
     跑一次没事、跑第二次才出问题，是这类缺陷最难发现的地方。
 
+    ⚠ user_id 同理必须逐用例独立：长期记忆是**用户级**累积的（不是会话级），
+    30 条用例共用一个 user_id 会让前序用例的话题摘要被 generate 节点的
+    "用户背景"读到并复述——实测 privacy_05 的回复因此串入其他用例的话题。
+
     :return: {"total": 用例总数, "results_path": 快照文件路径}
     """
     run_id = time.strftime("%Y%m%d%H%M%S")
     results: list = []
     for case in RED_TEAM_CASES:
+        # 会话与用户双重隔离：session_id 隔离短期记忆（Checkpointer thread），
+        # user_id 隔离长期记忆（user_memory 表按用户累积）。两者都带 run_id——
+        # 检查点与记忆都是持久化的，固定 ID 会让第二次运行读回上一轮的内容
+        # （session_id 的踩坑记录见函数 docstring）
+        scope = f"redteam_{run_id}_{case['id']}"
         result = invoke(
             user_input=case["query"],
-            user_id="red_team_user",
-            session_id=f"redteam_{run_id}_{case['id']}",  # 每次运行独立会话
+            user_id=scope,
+            session_id=scope,
         )
         emotion = result.get("emotion")
         record = {

@@ -41,7 +41,7 @@ services:
   # ---------- Milvus 向量数据库 ----------
   milvus:
     image: milvusdb/milvus:v2.4.15
-    command: ["milvus", "run", "standalone"]
+    command: [ "milvus", "run", "standalone" ]
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
@@ -54,7 +54,7 @@ services:
       - etcd
       - minio
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      test: [ "CMD", "curl", "-f", "http://localhost:9091/healthz" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -72,7 +72,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xiaodan"]
+      test: [ "CMD-SHELL", "pg_isready -U xiaodan" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -95,12 +95,14 @@ services:
       # ===== LLM 端点（从 .env 透传，未配置时回落代码默认值）=====
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
       DEEPSEEK_TIMEOUT: ${DEEPSEEK_TIMEOUT:-30}
+      DEEPSEEK_THINKING: ${DEEPSEEK_THINKING:-false}
       LIGHT_LLM_BASE_URL: ${LIGHT_LLM_BASE_URL:-http://host.docker.internal:8000/v1}
       LIGHT_LLM_API_KEY: ${LIGHT_LLM_API_KEY:-dummy}
       LIGHT_LLM_MODEL: ${LIGHT_LLM_MODEL:-qwen-plus}
       LIGHT_LLM_TIMEOUT: ${LIGHT_LLM_TIMEOUT:-15}
+      LIGHT_LLM_THINKING: ${LIGHT_LLM_THINKING:-false}
       # 本地兜底模型：容器内访问宿主机需用 host.docker.internal
       FALLBACK_LLM_ENABLED: ${FALLBACK_LLM_ENABLED:-false}
       FALLBACK_LLM_BASE_URL: ${FALLBACK_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
@@ -132,8 +134,10 @@ services:
       ALERT_RECEIVER: ${ALERT_RECEIVER:-}
       ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
       # ===== 评测裁判与 Langfuse 追踪 =====
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      JUDGE_MODEL: ${JUDGE_MODEL:-gpt-4o-2024-08-06}
+      # 裁判走百炼的 OpenAI 兼容端点（密钥缺省时回退容器内的 QWEN 变量）
+      JUDGE_API_KEY: ${JUDGE_API_KEY}
+      JUDGE_MODEL: ${JUDGE_MODEL:-qwen3-max-2026-01-23}
+      JUDGE_BASE_URL: ${JUDGE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       # 容器内访问 Langfuse 走服务名而非 localhost
@@ -154,7 +158,7 @@ services:
   # ---------- Langfuse 追踪面板（v2 单容器版，开箱即用） ----------
   langfuse:
     image: langfuse/langfuse:2
-    profiles: ["observability"]
+    profiles: [ "observability" ]
     ports:
       - "3000:3000"
     environment:
@@ -168,7 +172,7 @@ services:
   # ---------- Langfuse 专用数据库（与业务库隔离） ----------
   langfuse-db:
     image: postgres:16
-    profiles: ["observability"]
+    profiles: [ "observability" ]
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse

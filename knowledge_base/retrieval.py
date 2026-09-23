@@ -47,7 +47,7 @@ class RetrievalService:
         limit = top_k or settings.HYBRID_TOP_K
 
         # query 侧编码：同时拿到 dense 与 sparse 两路查询向量
-        query_vec = self.embedder.encode([query], is_query=True)[0]
+        query_vec = self.embedder.encode([query])[0]
 
         # 构造两路检索请求：dense 走 HNSW，sparse 走倒排索引，度量均为 IP（内积）
         dense_request = AnnSearchRequest(

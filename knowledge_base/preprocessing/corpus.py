@@ -15,6 +15,7 @@
 import json
 import os
 import re
+import time
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
@@ -48,8 +49,25 @@ CORPUS_CACHE_PATH = os.path.join("data", "processed", "parsed_corpus.json")
 PARSE_WORKERS = 4
 
 
+def _relative_path(file_path: str) -> str:
+    """相对路径标识（统一正斜杠），缓存键与来源标识共用。
+
+    跨盘符时回退绝对路径：Windows 下路径与 cwd 不在同一盘符时
+    ``os.path.relpath`` 会抛 ``ValueError``——若放任其上抛，文件会被
+    _parse_file_task 记成"解析失败"而静默跳过（实测发现）。
+    """
+    try:
+        relative = os.path.relpath(file_path)
+    except ValueError:
+        return os.path.abspath(file_path).replace("\\", "/")
+    return relative.replace("\\", "/")
+
+
 def load_document(file_path: str, doc_type: str, topic_tag: str) -> dict:
     """加载单篇文档：通知类先解析元数据头部，其余走 Unstructured 解析。
+
+    元数据三档优先级：文档自带头部（通知 txt）> 旁挂 sidecar
+    （爬虫为附件写的 ``<文件名>.meta.json``）> 默认值（全部 / 长期有效）。
 
     :param file_path: 文档路径
     :param doc_type: 文档类型（由所在目录名决定）
@@ -71,16 +89,22 @@ def load_document(file_path: str, doc_type: str, topic_tag: str) -> dict:
         body_text = elements_to_text(elements)
 
     # 元数据默认值：手动上传文档默认全员可见、长期有效；
-    # 爬虫产出的通知带【适用对象】【生效学期】头部，优先采用头部值
+    # 爬虫产出的通知带【适用对象】【生效学期】头部，优先采用头部值；
+    # 附件（PDF/DOCX）正文没有头部，改用爬虫旁挂的 sidecar 元数据
+    merged_meta = {**_load_sidecar_meta(file_path), **header_meta}
     metadata: dict = {
-        "source_url": header_meta.get("原文链接", "manual_upload"),
+        # 来源标识（相对路径，跨盘符回退绝对路径）：索引重建"按来源先删后插"
+        # 的唯一依据。不能用 source_url 代替——手动上传的文档该字段一律是
+        # manual_upload，按它删除会把全部手动文档一起删掉
+        "source_file": _relative_path(file_path),
+        "source_url": merged_meta.get("原文链接", "manual_upload"),
         "doc_type": doc_type,
         "topic_tag": topic_tag,
-        "target_audience": header_meta.get("适用对象", "全部"),
-        "valid_semester": header_meta.get("生效学期", "长期有效"),
-        "publish_date": header_meta.get("发布日期", ""),
+        "target_audience": merged_meta.get("适用对象", "全部"),
+        "valid_semester": merged_meta.get("生效学期", "长期有效"),
+        "publish_date": merged_meta.get("发布日期", ""),
         "language": "zh",
-        "title": header_meta.get("标题") or _title_from_filename(file_name),
+        "title": merged_meta.get("标题") or _title_from_filename(file_name),
     }
     return {"text": clean_text(body_text), "metadata": metadata}
 
@@ -131,7 +155,7 @@ def iter_document_records(
                 continue
 
             # 缓存键用相对路径：整目录搬移后缓存依然有效
-            cache_key = os.path.relpath(file_path).replace("\\", "/")
+            cache_key = _relative_path(file_path)
             fingerprint = _fingerprint(file_path)
             cached = cache.get(cache_key)
             if cached and cached.get("fingerprint") == fingerprint:
@@ -141,6 +165,7 @@ def iter_document_records(
             pending.append((cache_key, file_path, fingerprint, doc_type, dir_name))
 
     failures: list = []
+    parse_seconds: list = []
     for cache_key, parsed in _iter_parsed(pending, workers):
         if "error" in parsed:
             failures.append((os.path.basename(cache_key), parsed["error"]))
@@ -148,9 +173,17 @@ def iter_document_records(
             continue
         cache[cache_key] = parsed
         records.append(parsed["record"])
+        parse_seconds.append((os.path.basename(cache_key), parsed.get("elapsed", 0.0)))
         _save_cache(cache)  # 逐篇落盘：整批解析以小时计，中断不应丢已得成果
 
     records.sort(key=lambda record: record["path"])
+
+    # 性能可观测性：把本轮最慢的几篇打出来。单篇大 PDF 的解析速度本身压不动
+    # （整库已从小时级降到分钟级），但"哪几篇慢、慢多少"必须随时可见（2.1 #5）
+    if parse_seconds:
+        slowest = sorted(parse_seconds, key=lambda item: item[1], reverse=True)[:3]
+        detail = "；".join(f"{name} {seconds:.1f}s" for name, seconds in slowest)
+        print(f"[corpus] 本轮解析耗时最长: {detail}")
     print(
         f"[corpus] 文档 {len(records)} 篇（缓存命中 {cached_hits} 篇，"
         f"本次解析 {len(records) - cached_hits} 篇），失败 {len(failures)} 篇"
@@ -198,15 +231,19 @@ def _parse_file_task(task: tuple) -> tuple:
     """解析单个文件并返回缓存记录（不触碰缓存文件本身，可安全地放进子进程）。
 
     :param task: (缓存键, 文件路径, 指纹, doc_type, topic_tag)
-    :return: (缓存键, {"fingerprint", "record"} 或 {"error"})
+    :return: (缓存键, {"fingerprint", "elapsed", "record"} 或 {"error"})
     """
     cache_key, file_path, fingerprint, doc_type, topic_tag = task
+    started = time.perf_counter()
     try:
         document = load_document(file_path, doc_type, topic_tag)
     except Exception as error:  # 单个文件失败不应让整批解析作废
         return cache_key, {"error": f"{type(error).__name__}: {error}"}
     return cache_key, {
         "fingerprint": fingerprint,
+        # 单文件解析耗时（秒），由主进程汇总"最慢文件"——单篇大 PDF 的解析速度
+        # 无法在算法层压缩（v2 已按文件多进程），至少要让它可观测（2.1 #5）
+        "elapsed": time.perf_counter() - started,
         "record": {
             "path": cache_key,
             "doc_type": doc_type,
@@ -316,3 +353,26 @@ def _parse_notice_file(file_path: str) -> tuple:
 
     body = "\n".join(lines[body_start:])
     return meta, body
+
+
+def _load_sidecar_meta(file_path: str) -> dict:
+    """读取附件旁挂的元数据文件（``<文件名>.meta.json``，爬虫下载附件时写入）。
+
+    附件正文没有【适用对象】【生效学期】这类头部行，若不带元数据，
+    人群 / 时效过滤对附件完全失效（v2-plan 2.1 #12）。
+    文件缺失或损坏时返回空字典——回退默认值，不阻断建库。
+
+    :return: 与通知 txt 头部同名键的元数据字典（可能为空）
+    """
+    sidecar_path = file_path + ".meta.json"
+    if not os.path.exists(sidecar_path):
+        return {}
+    try:
+        with open(sidecar_path, encoding="utf-8") as file:
+            return json.load(file)
+    except (json.JSONDecodeError, OSError) as sidecar_error:
+        print(
+            f"[corpus] sidecar 元数据不可读，按默认值处理 "
+            f"{os.path.basename(sidecar_path)}: {sidecar_error}"
+        )
+        return {}

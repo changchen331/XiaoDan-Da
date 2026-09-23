@@ -11,13 +11,17 @@
 快路径不依赖意图分类的准确性：即使高频问题被误分类为"简单问答"，
 预查依然先于混合检索执行，秒回能力不受分类器影响；
 质量评估不合格回退到本节点重试时同样先过 FAQ 预查。
+
+质检重试（retry_count > 0）会**改变检索输入**：候选池随重试次数翻倍、
+重排片段逐次 +2、并去掉人群过滤（保留学期时效过滤）——否则重试拿到
+与首次完全相同的确定性结果，生成不可能有信息增益（v2-plan 2.1 #4）。
 """
 from agent.faq_verify import verify_faq_match
 from agent.state import AgentState
 from config.settings import settings, get_current_semester
 
 
-def build_filter_expr(user_profile: dict) -> str:
+def build_filter_expr(user_profile: dict, include_audience: bool = True) -> str:
     """构造元数据过滤表达式：按用户身份与当前学期过滤知识库。
 
     身份过滤：文档 target_audience 为"全部"或与用户角色一致时可见
@@ -26,18 +30,21 @@ def build_filter_expr(user_profile: dict) -> str:
 
     :param user_profile: 用户画像，role 字段取值
         本科生 / 研究生 / 留学生 / 教职工；未知角色不做身份过滤
+    :param include_audience: 是否保留身份过滤。质检重试时置 False（放宽召回）：
+        答案可能恰好在受众不匹配的文档里；而时效过滤必须保留——
+        把过期的选课通知交给模型，误导学生的代价高于答不上来
     """
-    role = user_profile.get("role", "全部")
     semester = get_current_semester()
+    semester_condition = f'metadata["valid_semester"] in ["{semester}", "长期有效"]'
+    if not include_audience:
+        return semester_condition
 
+    role = user_profile.get("role", "全部")
     # 未知角色（如教职工）放宽为全员可见，避免过滤条件过严导致空结果
     audiences = [role, "全部"] if role in ("本科生", "研究生", "留学生") else ["全部"]
     audience_list = ", ".join(f'"{audience}"' for audience in audiences)
 
-    return (
-        f'metadata["target_audience"] in [{audience_list}] and '
-        f'metadata["valid_semester"] in ["{semester}", "长期有效"]'
-    )
+    return f'metadata["target_audience"] in [{audience_list}] and {semester_condition}'
 
 
 def _faq_precheck(query: str, response_language: str) -> dict | None:
@@ -74,6 +81,10 @@ def _faq_precheck(query: str, response_language: str) -> dict | None:
 def retrieve(state: AgentState) -> dict:
     """检索入口节点：先 FAQ 预查，未命中走混合检索 + 重排。
 
+    质检重试（retry_count > 0）时放宽检索：候选池随重试次数翻倍、
+    重排片段逐次 +2、去掉人群过滤——保证重试的输入与首次不同，
+    否则同一份确定性结果会让重试永远拿不到新信息。
+
     检索失败时返回空结果集：下游 generate 节点对空上下文有明确的
     "无法确定"应答策略，保证服务不因中间件故障而中断。
     """
@@ -81,6 +92,7 @@ def retrieve(state: AgentState) -> dict:
 
     query = state["intent"].rewritten_query
     response_language = state.get("response_language", "中文")
+    retry_count = state.get("retry_count", 0)
 
     # ===== 快路径：FAQ 专用索引预查 =====
     matched = _faq_precheck(query, response_language)
@@ -91,13 +103,24 @@ def retrieve(state: AgentState) -> dict:
             "retrieved_contexts": [],  # FAQ 命中无检索上下文
         }
 
-    # ===== 慢路径：通用混合检索 =====
-    filter_expr = build_filter_expr(state.get("user_profile", {}))
+    # ===== 慢路径：通用混合检索（重试时逐级放宽）=====
+    filter_expr = build_filter_expr(
+        state.get("user_profile", {}), include_audience=retry_count == 0
+    )
+    hybrid_top_k = settings.HYBRID_TOP_K * (retry_count + 1)
+    rerank_top_k = settings.RERANK_TOP_K + 2 * retry_count
+    if retry_count > 0:
+        print(
+            f"[retrieve] 质检重试第 {retry_count} 次：放宽检索"
+            f"（去人群过滤、候选 {hybrid_top_k}、重排取 {rerank_top_k}）"
+        )
 
     try:
         service = get_retrieval_service()
-        candidates = service.hybrid_search(query, filter_expr=filter_expr)
-        reranked = service.rerank(query, candidates, top_k=settings.RERANK_TOP_K)
+        candidates = service.hybrid_search(
+            query, filter_expr=filter_expr, top_k=hybrid_top_k
+        )
+        reranked = service.rerank(query, candidates, top_k=rerank_top_k)
     except Exception as retrieval_error:
         print(f"[retrieve] 检索服务异常，返回空结果集: {retrieval_error}")
         reranked = []

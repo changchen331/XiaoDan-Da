@@ -33,7 +33,7 @@ class FAQIndex:
         ensure_collection_loaded(self.client, settings.MILVUS_FAQ_COLLECTION)
 
     def build(self, faq_entries: list) -> int:
-        """从结构化 FAQ 数据构建独立索引。
+        """从结构化 FAQ 数据构建独立索引（幂等：先清空既有行再写入）。
 
         向量化对象：标准问题 + 全部相似问法各自成行（共享同一 answer），
         一条 FAQ 的问法越多，被不同表述命中的概率越高。
@@ -66,6 +66,13 @@ class FAQIndex:
                 )
             cursor += question_count
 
+        # 幂等：先清空既有 FAQ 行再写入——重跑 build_index 不应累积重复问答。
+        # FAQ 没有"按来源替换"可言（题库以 faq.json 为唯一来源），
+        # 整体覆盖才是正确语义；id >= 0 匹配全部自增主键行
+        self.client.delete(
+            collection_name=settings.MILVUS_FAQ_COLLECTION, filter="id >= 0"
+        )
+
         insert_faq_rows(rows)
         return len(rows)
 
@@ -76,7 +83,7 @@ class FAQIndex:
         :param top_k: 召回的候选 FAQ 条数（取其最高分与阈值比较）
         :return: {"question", "answer", "score"} 或 None（未命中，调用方降级 RAG）
         """
-        query_vec = self.embedder.encode([query], is_query=True)[0]
+        query_vec = self.embedder.encode([query])[0]
 
         results = self.client.search(
             collection_name=settings.MILVUS_FAQ_COLLECTION,

@@ -185,3 +185,35 @@ def insert_faq_rows(rows: list) -> int:
     client = get_milvus_client()
     client.insert(collection_name=settings.MILVUS_FAQ_COLLECTION, data=rows)
     return len(rows)
+
+
+def delete_chunks_by_source(source_file: str) -> int:
+    """按来源文件删除既有 chunk（索引重建幂等：先删后插的基础操作）。
+
+    来源标识是文档级元数据 ``metadata["source_file"]``（相对路径）。
+    不能用 source_url 代替：手动上传的文档该字段一律为 ``manual_upload``，
+    按它删除会把所有手动文档一起删掉。
+
+    :param source_file: 相对路径形式的来源标识（由 corpus.load_document 写入）
+    :return: 删除条数
+    """
+    client = get_milvus_client()
+    deleted = client.delete(
+        collection_name=settings.MILVUS_COLLECTION,
+        filter=f'metadata["source_file"] == "{source_file}"',
+    )
+    return int(deleted.get("delete_count", 0))
+
+
+def reset_collections() -> None:
+    """删除两个 Collection（--rebuild 整库重建专用）。
+
+    适用场景：切分策略 / 向量维度 / schema 变更；或既有索引早于
+    ``source_file`` 字段引入——老 chunk 无法按来源定位，必须先整体清空，
+    否则新旧数据并存且无法按来源增量替换。
+    """
+    client = get_milvus_client()
+    for name in (settings.MILVUS_COLLECTION, settings.MILVUS_FAQ_COLLECTION):
+        if client.has_collection(name):
+            client.drop_collection(name)
+            print(f"[milvus_client] 已删除 Collection: {name}")

@@ -1,7 +1,15 @@
 """知识库索引构建脚本：原始文档 → 解析 → 清洗 → 切分 → 向量化 → 入库。
 
 用法：
-    python scripts/build_index.py [数据目录]
+    python scripts/build_index.py [数据目录] [--rebuild]
+
+幂等语义（重跑安全）：
+- 默认：通用知识库按 metadata["source_file"]（来源相对路径）**先删旧 chunk
+  再插新内容**，FAQ 索引整体清空后覆盖重建——文档更新后直接重跑即可，
+  不会累积重复数据
+- --rebuild：先删除两个 Collection 再从头建。切分策略 / 向量维度 / schema
+  变更时必须使用；既有索引若建立于 source_file 字段引入之前（老 chunk
+  无法按来源定位），也需先跑一次 --rebuild 完成一次干净重建
 
 数据目录约定（默认 data/raw/，目录名决定 doc_type 切分策略）：
     data/raw/
@@ -36,9 +44,9 @@ faq.json 格式（数组，每项一个问答条目）：
 确认检索质量无退化。
 """
 
+import argparse
 import json
 import os
-import sys
 
 from config.settings import get_current_semester
 from knowledge_base.faq import get_faq_index
@@ -46,18 +54,25 @@ from knowledge_base.indexing.embeddings import get_embedder
 from knowledge_base.indexing.milvus_client import (
     create_faq_collection,
     create_kb_collection,
+    delete_chunks_by_source,
     insert_chunks,
+    reset_collections,
 )
 from knowledge_base.preprocessing.chunker import chunk_by_type
 from knowledge_base.preprocessing.corpus import iter_document_records
 
 
-def build(data_dir: str) -> None:
+def build(data_dir: str, rebuild: bool = False) -> None:
     """索引构建主流程：建表 → FAQ 索引 → 通用知识库入库。
 
     :param data_dir: 原始数据根目录（默认 data/raw）
+    :param rebuild: 整库重建——先删除两个 Collection；默认为按来源幂等替换
     """
     print(f"[build_index] 数据目录: {data_dir}")
+
+    if rebuild:
+        print("[build_index] --rebuild：删除既有集合，整库重建")
+        reset_collections()
 
     # 第一步：确保两个 Collection 存在（幂等操作）
     create_kb_collection()
@@ -77,6 +92,16 @@ def build(data_dir: str) -> None:
     # （评测集记录的"来源 chunk"必须能在索引里找到），且解析结果带磁盘缓存，
     # 重跑建库不必再花几十分钟重新解析 PDF
     records, failed_files = iter_document_records(data_dir)
+
+    # 幂等：按来源先删旧 chunk 再插新内容，重跑不再累积重复数据。
+    # --rebuild 已整体清空，无需逐篇删（也避免对空集合发无谓请求）
+    if not rebuild:
+        replaced = sum(
+            delete_chunks_by_source(record["metadata"]["source_file"])
+            for record in records
+        )
+        if replaced:
+            print(f"[build_index] 幂等替换：已按来源清理 {replaced} 个旧 chunk")
 
     total_chunks = 0
     for dir_name in sorted({record["topic_tag"] for record in records}):
@@ -106,4 +131,19 @@ def build(data_dir: str) -> None:
 
 
 if __name__ == "__main__":
-    build(sys.argv[1] if len(sys.argv) > 1 else "data/raw")
+    parser = argparse.ArgumentParser(
+        description="构建知识库索引（默认按来源幂等重建，--rebuild 整库重建）"
+    )
+    parser.add_argument(
+        "data_dir",
+        nargs="?",
+        default="data/raw",
+        help="原始数据根目录（默认 data/raw）",
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="整库重建：先删除两个 Collection（schema / 向量维度变更时必须使用）",
+    )
+    arguments = parser.parse_args()
+    build(arguments.data_dir, rebuild=arguments.rebuild)

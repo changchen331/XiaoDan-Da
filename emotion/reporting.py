@@ -16,9 +16,10 @@ import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
 
-import psycopg2
+import psycopg
 
 from config.settings import settings
+from infra.db import connection
 
 # 高危上报表 DDL：独立于 user_memory 与 Checkpointer 内部表
 ALERT_TABLE_DDL = """
@@ -85,7 +86,7 @@ def submit_report(record: dict) -> None:
     """
     try:
         _insert_alert(record)
-    except psycopg2.Error as db_error:
+    except psycopg.Error as db_error:
         # 上报落库失败不抛出：不能因数据库故障中断对用户的关怀回复
         print(f"[reporting] 上报写库失败（需人工核对补录）: {db_error}")
 
@@ -98,7 +99,7 @@ def submit_report(record: dict) -> None:
 
 def _insert_alert(record: dict) -> None:
     """将上报记录写入独立的 emotion_alerts 表（幂等建表）。"""
-    with psycopg2.connect(settings.postgres_dsn) as conn:
+    with connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(ALERT_TABLE_DDL)
             cursor.execute(

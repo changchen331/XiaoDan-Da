@@ -27,10 +27,23 @@ class Settings:
     # （便于把密钥只保存在操作系统环境里，不在 .env 中再存一份副本）
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    # 默认值刻意只写型号名、不带日期后缀：DeepSeek 侧型号更迭快
+    # （旧名 deepseek-chat 已从官方模型列表移除），这里只保证「开箱可用」，
+    # 具体型号以厂商文档为准，需要固定版本时由 .env 覆盖。
+    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
     DEEPSEEK_TIMEOUT: int = int(
         os.getenv("DEEPSEEK_TIMEOUT", "30")
     )  # 生成环节 30 秒超时
+    # 思考模式开关（默认关闭）。现行型号（DeepSeek-V4.1-Flash / Qwen3.8 系列）
+    # **默认开启思考模式**，对本项目有两个副作用：
+    # ① 思考 token 计入输出、按输出价计费——实测只回两个字也多耗 80+ token；
+    # ② 思考模式下 temperature 会被厂商改写（千问文档：传入更小值自动调整为 0.6），
+    #    而本项目轻量任务全部按 0.1 求确定性，等于设计意图被悄悄推翻。
+    # 默认关闭：本项目的答案事实性由检索上下文保证，需要的是稳定可复现而非自由推理；
+    # 需要开启时置 true 即可（厂商参数名不同，转换见 agent/llm_clients.py）。
+    DEEPSEEK_THINKING: bool = (
+        os.getenv("DEEPSEEK_THINKING", "false").lower() == "true"
+    )
 
     # 轻量任务模型：意图路由 / 质量评估 / Query 改写 / 摘要 / FAQ 校验。
     #
@@ -51,6 +64,12 @@ class Settings:
     LIGHT_LLM_TIMEOUT: int = int(
         os.getenv("LIGHT_LLM_TIMEOUT", "15")
     )  # 轻量任务 15 秒超时
+    # 思考模式开关（默认关闭，理由见上方 DEEPSEEK_THINKING）；
+    # 对轻量任务而言关闭它是硬要求：意图路由 / 质检 / FAQ 校验要的是
+    # 低温度下的确定性判定，而思考模式会把 temperature 强制改写为 0.6。
+    LIGHT_LLM_THINKING: bool = (
+        os.getenv("LIGHT_LLM_THINKING", "false").lower() == "true"
+    )
 
     # 本地兜底模型：**仅当云端端点全部不可用时**接管轻量任务。
     #

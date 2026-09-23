@@ -10,50 +10,48 @@ description = "复旦校园智能问答与心理健康监测系统"
 requires-python = ">=3.10"
 dependencies = [
     # ===== 模块三：Agent 核心引擎 =====
-    "langgraph>=0.2.0",                       # 状态图编排 + Checkpointer
-    "langgraph-checkpoint-postgres>=1.0.0",   # PostgresSaver 短期记忆
-    "openai>=1.40.0",                         # DeepSeek / vLLM 均兼容 OpenAI 协议
+    "langgraph>=0.2.0", # 状态图编排 + Checkpointer
+    "langgraph-checkpoint-postgres>=1.0.0", # PostgresSaver 短期记忆
+    "openai>=1.40.0", # DeepSeek / vLLM 均兼容 OpenAI 协议
     "python-dotenv>=1.0.0",
     # ===== 模块一：知识库引擎 =====
     # 必须限制上界：pymilvus 3.x 的 create_collection 要求 index_params 传 IndexParams
     # 对象（不再接受 dict），且客户端主版本须与 Milvus 服务端（v2.4.x）对齐
-    "pymilvus>=2.4.0,<2.5",                   # Milvus 客户端（hybrid_search + RRF）
+    "pymilvus>=2.4.0,<2.5", # Milvus 客户端（hybrid_search + RRF）
     # extras 必须覆盖代码实际处理的格式：基础包不含任何解析器，
     # 缺 pdf/docx/doc 时 partition_pdf()/partition_docx() 会直接 ImportError
-    "unstructured[pdf,docx,doc]>=0.15.0",     # PDF/HTML/DOCX/DOC 统一解析
-    "flagembedding>=1.2.0",                   # BGE-M3（双路向量）+ BGE-Reranker-v2-M3
-    "requests>=2.31.0",                       # 官网爬虫
-    "beautifulsoup4>=4.12.0",                 # 官网爬虫 HTML 解析
-    "playwright>=1.63.0",                     # 官网爬虫 JS 渲染（教务处等 SPA 站点）
+    "unstructured[pdf,docx,doc]>=0.15.0", # PDF/HTML/DOCX/DOC 统一解析
+    "flagembedding>=1.2.0", # BGE-M3（双路向量）+ BGE-Reranker-v2-M3
+    "requests>=2.31.0", # 官网爬虫
+    "beautifulsoup4>=4.12.0", # 官网爬虫 HTML 解析
+    "playwright>=1.63.0", # 官网爬虫 JS 渲染（教务处等 SPA 站点）
     # 注意：首次使用需另执行 playwright install chromium 下载浏览器内核
     # ===== 模块二：情绪检测引擎 =====
     "torch>=2.1.0",
-    "transformers>=4.40.0",                   # XLM-RoBERTa 微调与推理
+    "transformers>=4.40.0", # XLM-RoBERTa 微调与推理
     "datasets>=2.19.0",
-    "scikit-learn>=1.4.0",                    # 评测混淆矩阵 / 训练集切分
+    "scikit-learn>=1.4.0", # 评测混淆矩阵 / 训练集切分
     # ===== 模块四：评估与可观测 =====
-    "ragas>=0.4.3",                           # RAG 五指标评测
-    "langchain-openai>=0.1.0",                # RAGAS 裁判模型的 LangChain 封装
-    "langchain-huggingface>=0.0.3",           # RAGAS 本地 embedding
+    "ragas>=0.4.3", # RAG 五指标评测
+    "langchain-openai>=0.1.0", # RAGAS 裁判模型的 LangChain 封装
+    "langchain-huggingface>=0.0.3", # RAGAS 本地 embedding
     # 必须限制上界：0.4.2 移除了 langchain_community.chat_models.vertexai 与
     # llms.VertexAI，而 ragas（至 0.4.3）仍在 llms/base.py 顶层 import 这两个符号，
     # 导致 import ragas 直接 ModuleNotFoundError。
     # 0.4.1 两者俱在，且其 langchain-core>=1.0.1,<2.0.0 与 langgraph 所要求的
     # langchain-core 1.x 兼容——因此锁在 0.4.1 是唯一不用回滚编排层的解。
     "langchain-community>=0.4.1,<0.4.2",
-    "pandas>=2.0.0",                          # 评测明细导出
-    "langfuse>=2.27.0",                       # 全链路追踪（开关式，未配置 keys 不生效）
+    "pandas>=2.0.0", # 评测明细导出
+    "langfuse>=2.27.0", # 全链路追踪（开关式，未配置 keys 不生效）
     # ===== 模块五：服务化 =====
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
-    "psycopg2-binary>=2.9.0",                 # PostgreSQL 驱动（记忆 / 上报 / Checkpointer）
     "pydantic>=2.13.5",
     # 显式声明并限制上界：pymilvus 2.4.x 在导入时使用 pkg_resources
     # （from pkg_resources import get_distribution），而该模块在 setuptools 81 中
     # 已被移除，且 uv 创建的虚拟环境默认不含 setuptools，不声明会直接 ImportError
     "setuptools<81",
-    "psycopg[binary]>=3.2",
-    "langchain-community>=0.4.1,<0.4.2",
+    "psycopg[binary]>=3.2", # PostgreSQL 驱动（记忆 / 上报 / Checkpointer 统一 psycopg3，见 infra/db.py）
 ]
 
 # 开发依赖（uv sync 默认安装，Docker 镜像构建用 --no-dev 跳过）

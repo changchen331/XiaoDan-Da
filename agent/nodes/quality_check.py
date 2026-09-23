@@ -7,6 +7,10 @@
 防死循环设计：重试计数在评估节点累加，达到上限（默认 2 次）后
 无论质量如何直接放行——第 3 次生成仍不合格时，
 一条"不够完美但可用"的回答远优于无限循环或空响应。
+
+重试不会重复同样的检索：retrieve 节点按 retry_count 逐级放宽
+候选池与过滤条件（见该节点 docstring），让下一次生成有新的上下文
+可用，而不是把同一份结果再生成一遍（v2-plan 2.1 #4）。
 """
 from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
 from agent.state import AgentState, QualityResult

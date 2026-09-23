@@ -31,12 +31,16 @@ class BGEM3Embedder:
         """
         self.model = BGEM3FlagModel(settings.EMBED_MODEL_NAME, use_fp16=True)
 
-    def encode(self, texts: list, is_query: bool = False) -> list:
+    def encode(self, texts: list) -> list:
         """批量编码，返回每个文本的 {dense, sparse} 向量对。
 
-        :param texts: 文本列表（入库 chunk 或用户 query）
-        :param is_query: True 按检索侧重编码（短文本），False 按语料侧编码（长文本）。
-            BGE-M3 对两种角色使用不同的编码前缀，正确设置可提升召回质量。
+        **不区分 query / 语料角色**：BGE-M3 官方用法不要求 query 指令前缀
+        （这是它与 bge-*-v1.5 系列的关键区别，后者才需为检索语句加前缀）。
+        此前这里有个 ``is_query`` 参数，docstring 宣称"差异化编码"实际却是
+        空操作——已删除，避免后人信以为真；将来若换用需要前缀的模型，
+        必须真实实现，而不是用空参数占位（v2-plan 2.1 #9）。
+
+        :param texts: 文本列表（入库 chunk 与用户 query 同构处理）
         :return: [{"dense": list[float], "sparse": dict[int, float]}, ...]
         """
         outputs = self.model.encode(

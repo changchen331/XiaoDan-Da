@@ -91,13 +91,13 @@ def locate_gold_indices(chunks: list, doc: str, evidence: str) -> list:
     ]
 
 
-def encode_texts(texts: list, is_query: bool = False) -> np.ndarray:
+def encode_texts(texts: list) -> np.ndarray:
     """分批编码为归一化稠密向量矩阵（余弦相似度的前提是模长归一）。"""
     embedder = get_embedder()
     batches: list = []
     for start in range(0, len(texts), ENCODE_BATCH):
         batch = texts[start : start + ENCODE_BATCH]
-        vectors = [item["dense"] for item in embedder.encode(batch, is_query=is_query)]
+        vectors = [item["dense"] for item in embedder.encode(batch)]
         batches.append(np.asarray(vectors, dtype=np.float32))
         print(f"[chunk_experiment] 编码 {min(start + ENCODE_BATCH, len(texts))}/{len(texts)}")
 
@@ -191,7 +191,7 @@ def run(data_path: str, top_k: int, max_questions: int | None) -> dict:
         )
     print("[chunk_experiment] 校验通过：评测集来源 chunk 与线上切分逐字一致")
 
-    query_matrix = encode_texts([item["question"] for item in eval_items], is_query=True)
+    query_matrix = encode_texts([item["question"] for item in eval_items])
 
     report: dict = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out",
         default="data/eval/chunk_experiment.json",
-        help="实验报告输出路径（供 docs/05-evidence.md 引用）",
+        help="实验报告输出路径（供评测证据记录引用）",
     )
     args = parser.parse_args()
 

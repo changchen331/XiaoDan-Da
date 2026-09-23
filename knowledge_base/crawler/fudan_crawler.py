@@ -37,7 +37,9 @@ data/processed/crawled_urls.json 中，重复爬取时自动跳过。附件 URL 
     【原文链接】https://jwc.fudan.edu.cn/xx/xxxx.htm
     【适用对象】全部
     【生效学期】2026-2027秋季
-- 附件正文：PDF / DOCX 等原始文件，文件名即通知标题
+- 附件正文：PDF / DOCX 等原始文件，文件名即通知标题；
+  同名旁挂 `<文件名>.meta.json` 传递通知页元数据（适用对象 / 生效学期等）——
+  附件正文里没有头部行，若不带元数据，人群 / 时效过滤对其完全失效（2.1 #12）
 """
 
 import hashlib
@@ -438,14 +440,29 @@ class FudanCrawler:
             print(f"[crawler] 无有效网页正文且无附件，跳过: {url}")
             return []
 
+        # 附件旁挂元数据：附件（PDF/DOCX）正文里没有头部行，其
+        # 【适用对象】【生效学期】等字段只能靠 sidecar 传给索引侧，
+        # 否则附件永远以「全部 / 长期有效」入库，人群过滤对它们形同虚设
+        display_title = title or self._page_title(soup, url)
+        publish_date = self._extract_publish_date(soup.get_text(), url)
+        sidecar_meta = {
+            "标题": display_title,
+            "发布日期": publish_date,
+            "原文链接": url,
+            "适用对象": source["target_audience"],
+            "生效学期": self._resolve_semester(source, publish_date),
+        }
+
         saved_documents: list = []
         for attachment_url in attachments:
-            file_path = self._download_attachment(attachment_url, title)
+            file_path = self._download_attachment(
+                attachment_url, display_title, sidecar_meta
+            )
             if file_path is None:
                 continue
             saved_documents.append(
                 {
-                    "title": title,
+                    "title": display_title,
                     "path": file_path,
                     "source": attachment_url,
                 }
@@ -648,12 +665,16 @@ class FudanCrawler:
                 attachments.append(absolute_url)
         return attachments
 
-    def _download_attachment(self, url: str, title: str) -> str | None:
+    def _download_attachment(
+        self, url: str, title: str, sidecar_meta: dict
+    ) -> str | None:
         """下载附件到 data/raw/手册/（长文档走递归切分策略）。
 
         文件名为通知标题（build_index 以文件名作为文档标题），
-        后缀附加 URL 哈希片段避免同名冲突。
+        后缀附加 URL 哈希片段避免同名冲突；同时旁挂
+        ``<文件名>.meta.json`` 传递通知页元数据（见 _save_page）。
 
+        :param sidecar_meta: 通知页元数据字典（键与 txt 头部字段同名）
         :return: 落盘路径；下载失败或文件过小时返回 None
         """
         try:
@@ -678,10 +699,21 @@ class FudanCrawler:
             file_path = os.path.join(ATTACHMENT_OUTPUT_DIR, file_name)
             with open(file_path, "wb") as file:
                 file.write(response.content)
+            self._save_sidecar_meta(file_path, sidecar_meta)
             return file_path
         except (requests.RequestException, OSError) as download_error:
             print(f"[crawler] 附件下载失败 {url}: {download_error}")
             return None
+
+    @staticmethod
+    def _save_sidecar_meta(file_path: str, sidecar_meta: dict) -> None:
+        """写入附件旁挂元数据文件（``<文件名>.meta.json``）。
+
+        消费方是 knowledge_base.preprocessing.corpus：其目录扫描按白名单
+        扩展名过滤，``.meta.json`` 不会被误当作文档入库。
+        """
+        with open(file_path + ".meta.json", "w", encoding="utf-8") as file:
+            json.dump(sidecar_meta, file, ensure_ascii=False, indent=2)
 
     @staticmethod
     def _safe_filename(title: str, fallback: str) -> str:

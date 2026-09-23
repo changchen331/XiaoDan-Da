@@ -8,11 +8,13 @@
 
 表结构独立于 Checkpointer 的内部表与 emotion_alerts 上报表，
 三个数据域互不干扰，便于分别做权限控制与备份策略。
+
+连接管理统一走 ``infra.db.connection``（psycopg3 + 显式关闭），本模块只管 SQL。
 """
 
-import psycopg2
+import psycopg
 
-from config.settings import settings
+from infra.db import connection
 
 # 长期记忆表 DDL（幂等建表）
 MEMORY_TABLE_DDL = """
@@ -33,7 +35,7 @@ def insert_memory(user_id: str, session_id: str, summary: str, intent: str) -> N
     写入失败不抛异常：记忆写入属于增强功能，不能阻断主回答流程。
     """
     try:
-        with psycopg2.connect(settings.postgres_dsn) as conn:
+        with connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(MEMORY_TABLE_DDL)
                 cursor.execute(
@@ -41,7 +43,7 @@ def insert_memory(user_id: str, session_id: str, summary: str, intent: str) -> N
                     "VALUES (%s, %s, %s, %s)",
                     (user_id, session_id, summary, intent),
                 )
-    except psycopg2.Error as db_error:
+    except psycopg.Error as db_error:
         print(f"[memory_store] 长期记忆写入失败（不影响主流程）: {db_error}")
 
 
@@ -53,7 +55,7 @@ def fetch_recent_memories(user_id: str, limit: int = 5) -> list:
     :return: [{"summary", "intent", "created_at"}, ...]，查询失败时返回空列表
     """
     try:
-        with psycopg2.connect(settings.postgres_dsn) as conn:
+        with connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT summary, intent, created_at FROM user_memory "
@@ -65,7 +67,7 @@ def fetch_recent_memories(user_id: str, limit: int = 5) -> list:
             {"summary": row[0], "intent": row[1], "created_at": row[2].isoformat()}
             for row in rows
         ]
-    except psycopg2.Error as db_error:
+    except psycopg.Error as db_error:
         # 数据库不可用时静默降级：无个性化上下文，回答流程不受影响
         print(f"[memory_store] 长期记忆读取失败（降级为无个性化）: {db_error}")
         return []
