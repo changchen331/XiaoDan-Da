@@ -1,7 +1,10 @@
 """XLM-RoBERTa 情绪分类模型微调脚本（全量微调，单卡 4090 约 25-50 分钟）。
 
 用法：
-    python scripts/train_emotion_model.py [--train 路径] [--val 路径]
+    python -m scripts.train_emotion_model [--train 路径] [--val 路径]
+
+注：必须用 `python -m` 从仓库根目录运行（直接执行脚本时仓库根不在 `sys.path` 上，
+`config` / `emotion` 等顶层包会 import 失败）。
 
 数据格式（JSON 数组，UTF-8）：
     [{"text": "最近考试压力好大", "label": "轻度困扰"}, ...]
@@ -51,11 +54,12 @@ from transformers import (
 )
 
 from config.settings import settings
+from emotion.classifier import MAX_INPUT_TOKENS
 
 # 基座模型：跨语言预训练，同时覆盖中英文情绪表达（留学生场景）
 BASE_MODEL_NAME = "xlm-roberta-base"
-# 输入截断长度：情绪表达集中在文本前段
-MAX_LENGTH = 128
+# 输入截断长度不在这里定义：与推理侧共用 emotion.classifier.MAX_INPUT_TOKENS
+# （两边各写一个 128 字面量会静默漂移，训练与推理的截断口径必须一致）
 # 高危样本过采样倍数
 HIGH_RISK_OVERSAMPLE = 2
 
@@ -83,7 +87,7 @@ class EmotionDataset:
         encoded = self.tokenizer(
             self.texts[idx],
             truncation=True,
-            max_length=MAX_LENGTH,
+            max_length=MAX_INPUT_TOKENS,
             padding="max_length",
             return_tensors="pt",
         )

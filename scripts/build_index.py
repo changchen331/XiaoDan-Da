@@ -1,7 +1,10 @@
 """知识库索引构建脚本：原始文档 → 解析 → 清洗 → 切分 → 向量化 → 入库。
 
 用法：
-    python scripts/build_index.py [数据目录] [--rebuild]
+    python -m scripts.build_index [数据目录] [--rebuild]
+
+注：必须用 `python -m` 从仓库根目录运行（直接执行 `scripts/build_index.py` 时
+仓库根不在 `sys.path` 上，`knowledge_base` 等顶层包会 import 失败）。
 
 流水线实现与幂等语义见 ``knowledge_base.indexing.build_index``（本脚本只负责
 命令行参数与数据契约说明，逻辑放在模块层以便单测覆盖与第二入口复用）。

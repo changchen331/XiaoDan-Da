@@ -12,9 +12,14 @@
 数据来源均为公开页面（无需登录、不含个人隐私数据）；产出的 `data/raw/faq.json`
 落在 `.gitignore` 覆盖的 `data/raw/` 下，与其余语料一样不入库。
 
-用法：
-    python scripts/build_faq.py            # 抽取 + 合成 + 写 data/raw/faq.json
-    python scripts/build_faq.py --no-enrich  # 只抽取，不调模型（离线可跑）
+**题库的审定程度（如实标注）**：问答由公开页面**自动抽取**，并非人工审定的高频问答。
+抽取规则做了噪声过滤（见 `_strip_trailing_residue`：剥掉黏在答案尾部的章节标题与
+页面控件文字），但**未逐条人工审定**——改动抽取规则后应人工抽检一批再重建索引。
+
+用法（**从仓库根目录**运行；必须用 `python -m`——直接执行 `scripts/build_faq.py`
+时仓库根不在 `sys.path` 上，`infra` 等顶层包会 import 失败）：
+    python -m scripts.build_faq               # 抽取 + 合成 + 写 data/raw/faq.json
+    python -m scripts.build_faq --no-enrich   # 只抽取，不调模型（离线可跑）
 """
 
 import argparse
@@ -100,6 +105,18 @@ _TRAILING_NOTE_RE = re.compile(r"^\s*（[^）]{0,20}）\s*")
 #: 剥离答案尾部残留的下一条编号（切块按编号边界，末块会带上下一条的 `2、`）
 _TRAILING_NUMBER_RE = re.compile(r"\s*\d+\s*[.、]\s*$")
 
+#: 抽取残留的两类**尾部噪声**。答案会原样直返用户，故必须在抽取阶段就剥掉。
+#:
+#: ① 章节标题——切块只按编号标记，页面上的小标题不属于任何条目，
+#:    于是黏在**上一条答案的末尾**（实测："其他问题""邮件客户端问题"
+#:    "邮箱收发信问题""纸本学位论文"）。形态是**纯中文、无句读、长度很短**。
+#: ② 页面控件文字——"查看原图"页的按钮文本（实测："返回 原图 /"）。
+#:    用重复组而非单个关键词：实际残留是"返回 原图 /"这样的**多个控件词串**。
+_TRAILING_SECTION_RE = re.compile(r"\s*[\u4e00-\u9fa5][\u4e00-\u9fa5 \u3000]{1,11}\s*$")
+_TRAILING_PAGE_UI_RE = re.compile(
+    r"(?:\s*(?:返回|原图|上一篇|下一篇|打印本页|关闭窗口)[\s/、|]*)+$"
+)
+
 
 def _clean(text: str) -> str:
     """规整问答文本：去掉问/答标记、尾部编号与问句括号注释，压掉换行与多余空格。"""
@@ -108,6 +125,50 @@ def _clean(text: str) -> str:
     collapsed = re.sub(r"\s*\n\s*", " ", text)
     collapsed = re.sub(r"\s{2,}", " ", collapsed).strip(" 　-—")
     return _TRAILING_NUMBER_RE.sub("", collapsed).strip()
+
+
+def _strip_trailing_residue(answer: str) -> str:
+    """剥掉答案尾部黏上的章节标题 / 页面控件文字（两类残留的形态见上方注释）。
+
+    最多剥两轮（覆盖"标题 + 控件"叠加），且要求剥完仍满足 `MIN_ANSWER_LEN`：
+    否则保留原样——宁可留一点噪声，也不能把一条短答案误删成空。
+    """
+    stripped = answer
+    for _ in range(2):
+        candidate = _TRAILING_PAGE_UI_RE.sub(
+            "", _TRAILING_SECTION_RE.sub("", stripped)
+        ).strip()
+        if candidate == stripped or len(candidate) < MIN_ANSWER_LEN:
+            break
+        stripped = candidate
+    return stripped
+
+
+#: 答案**开头**多出来的一问：页面会把并列的另一种问法（或下一问的原文）挤进同一条目，
+#: 表现为答案以"…？"开头。实测 4/51 条（如"在哪里提交我的电子版学位学位论文？ 复旦大学…"）。
+#: 注：问句字段本身是干净的——残留落在**答案头部**。
+_LEADING_QUESTION_RE = re.compile(r"^\s*[^？?]{2,60}[？?]\s*")
+
+#: 页面渲染会把拉丁 / 数字 token 从中间断开（实测 `i map.exmail.qq.com`、`E xchange`、`5 0 MB`）。
+#: 只合**证据支持的两类**：单个拉丁字母 + 空格 + 词；数字 + 空格 + 数字。
+#: 刻意不做"N 个字母之间的空格全合"——那会把 "the exam" 这类正常英文短语也粘起来。
+_BROKEN_LETTER_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]) (?=[A-Za-z0-9])")
+_BROKEN_DIGIT_RE = re.compile(r"(?<=\d) (?=\d)")
+
+
+def _strip_leading_question(answer: str) -> str:
+    """剥掉答案开头多出来的那一问（形态见上方注释）。
+
+    只剥一次，且要求剥完仍满足 `MIN_ANSWER_LEN`：答案体本来就短时保留原样。
+    """
+    stripped = _LEADING_QUESTION_RE.sub("", answer, count=1).strip()
+    return stripped if len(stripped) >= MIN_ANSWER_LEN else answer
+
+
+def _fix_broken_tokens(text: str) -> str:
+    """把被页面渲染断开的拉丁字母 / 数字 token 合回去（两类规则见上方注释）。"""
+    text = _BROKEN_LETTER_RE.sub(r"\1", text)
+    return _BROKEN_DIGIT_RE.sub("", text)
 
 
 def _is_valid(question: str, answer: str) -> bool:
@@ -137,7 +198,9 @@ def extract_pairs(text: str) -> list:
         if mark == -1:
             continue
         question = _clean(block[: mark + 1])
-        answer = _clean(block[mark + 1 :])
+        answer = _fix_broken_tokens(
+            _strip_leading_question(_strip_trailing_residue(_clean(block[mark + 1 :])))
+        )
         if _is_valid(question, answer):
             pairs.append({"question": question, "answer": answer})
     return pairs

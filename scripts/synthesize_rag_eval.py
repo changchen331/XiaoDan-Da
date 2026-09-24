@@ -1,7 +1,10 @@
 """RAG 评测集合成：从知识库 chunk 反向生成「学生真实会问的问题」。
 
 用法：
-    python scripts/synthesize_rag_eval.py --count 100 --out data/eval/rag_eval.json
+    python -m scripts.synthesize_rag_eval --count 100 --out data/eval/rag_eval.json
+
+注：必须用 `python -m` 从仓库根目录运行（直接执行脚本时仓库根不在 `sys.path` 上，
+`infra` / `knowledge_base` 等顶层包会 import 失败）。
 
 为什么是合成而不是真实用户问题：
 设计文档原本要求「200 条真实用户问题 + 200 条教务人工标注答案」，

@@ -2,8 +2,10 @@
 
 隐私保护原则（对应架构文档的数据最小化要求）：
 - 上报记录使用内部 user_id，不含真实姓名 / 学号 / 联系方式
-- 触发内容只保留前 100 字摘要，不传输完整对话
-- 上下文仅携带最近 3 轮，够人工研判即可
+- 触发内容与上下文都先**脱敏**（手机号 / 学号 → 占位符）再按需截断：
+  触发摘要取前 100 字，上下文仅携带最近 3 轮
+- 脱敏口径不在这里定义，统一走 `infra/privacy.sanitize_outbound()`
+  （与离线评测送外部裁判前的脱敏共用同一判据，避免"哪类数据算已脱敏"有两种答案）
 - 上报数据写入独立的 emotion_alerts 表，与问答数据、记忆数据物理隔离，
   仅授权的心理咨询中心工作人员可查询
 
@@ -20,6 +22,14 @@ import psycopg
 
 from config.settings import settings
 from infra.db import connection
+from infra.privacy import sanitize_outbound
+
+#: 触发摘要的截断长度（字符）。与脱敏同源：它是"出域数据上限"的一部分，
+#: 因此不放进 settings（换掉它不会让部署更灵活，只会改变值班老师能看到的判研依据）
+TRIGGER_TEXT_LIMIT = 100
+
+#: 上下文只保留最近 3 轮：够人工研判即可
+CONTEXT_MAX_ROUNDS = 3
 
 # 高危上报表 DDL：独立于 user_memory 与 Checkpointer 内部表
 ALERT_TABLE_DDL = """
@@ -65,6 +75,23 @@ ALERT_REFERENT_MIGRATION = """
                             """
 
 
+def _minimize_context(context: list) -> list:
+    """上下文出域前的脱敏：只对 `content` 脱敏，保留 role 等结构字段。
+
+    元素形状不保证（`conversation_history` 可由 API 调用方直接传入），故对非字典
+    元素也做兜底——上报是安全路径，不该因为一个畸形元素让整轮上报失败。
+    """
+    minimized: list = []
+    for line in context[-CONTEXT_MAX_ROUNDS:]:
+        if isinstance(line, dict):
+            minimized.append(
+                {**line, "content": sanitize_outbound(str(line.get("content", "")))}
+            )
+        else:
+            minimized.append(sanitize_outbound(str(line)))
+    return minimized
+
+
 def build_report_record(
     user_id: str,
     trigger_text: str,
@@ -79,7 +106,7 @@ def build_report_record(
     :param trigger_text: 触发高危判定的原始输入
     :param emotion_level: 情绪级别（"高危"）
     :param emotion_confidence: 检测置信度
-    :param recent_context: 最近对话历史（仅截取最近 3 轮）
+    :param recent_context: 最近对话历史（仅取最近 3 轮，且逐条脱敏）
     :param referent: 危险表达的指向；规则命中的高危路径上由上报环节在
         **后台**补齐（见 agent/nodes/report.py），故允许为空
     :return: 可直接入库 / 发邮件的记录字典
@@ -89,8 +116,11 @@ def build_report_record(
         "detected_at": datetime.now().isoformat(),
         "emotion_level": emotion_level,
         "confidence": emotion_confidence,
-        "trigger_text_summary": trigger_text[:100],  # 摘要截断：数据最小化
-        "recent_context": recent_context[-3:],
+        # 出域文本一律经 sanitize_outbound：先脱敏、再截断（口径见 infra/privacy.py）
+        "trigger_text_summary": sanitize_outbound(
+            trigger_text, limit=TRIGGER_TEXT_LIMIT
+        ),
+        "recent_context": _minimize_context(recent_context),
         "referent": referent,
     }
 

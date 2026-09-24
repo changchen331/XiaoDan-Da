@@ -15,18 +15,21 @@ FAQ 专用索引让此类问题一步命中标准答案，兼顾响应速度与�
 """
 
 from config.settings import settings
-from knowledge_base.indexing.embeddings import get_embedder
-from knowledge_base.indexing.milvus_client import (
-    ensure_collection_loaded,
-    get_milvus_client,
-    insert_faq_rows,
-)
 
 
 class FAQIndex:
     """FAQ 专用 Collection 的构建与匹配。"""
 
     def __init__(self) -> None:
+        # 重型导入放在**实例化处**：embeddings 会连带 FlagEmbedding / transformers
+        # （实测约 11s），而"导入本模块"（Agent 启动、单测、脚本）并不需要它。
+        # 顺带收窄依赖故障面——I1 的 torchvision 崩溃正是沿着这条链炸到导入方的。
+        from knowledge_base.indexing.embeddings import get_embedder
+        from knowledge_base.indexing.milvus_client import (
+            ensure_collection_loaded,
+            get_milvus_client,
+        )
+
         self.client = get_milvus_client()
         self.embedder = get_embedder()
         # 同 RetrievalService：检索前置条件，服务初始化时统一保证
@@ -72,6 +75,9 @@ class FAQIndex:
         self.client.delete(
             collection_name=settings.MILVUS_FAQ_COLLECTION, filter="id >= 0"
         )
+
+        # 局部导入：与 __init__ 同一考虑，只在真正写库时才付加载代价
+        from knowledge_base.indexing.milvus_client import insert_faq_rows
 
         insert_faq_rows(rows)
         return len(rows)

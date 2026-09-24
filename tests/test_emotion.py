@@ -7,6 +7,7 @@ import pytest
 from agent.state import EmotionResult
 from config.settings import settings
 from emotion.detector import detect_emotion
+from emotion.reporting import build_report_record
 from emotion.rule_engine import LEVEL_HIGH, LEVEL_MID, LEVEL_NORMAL, RuleEngine
 
 # ==================== 规则引擎 ====================
@@ -318,3 +319,42 @@ def test_classifier_initialized_once_under_concurrency(
         thread.join()
 
     assert len(created) == 1
+
+
+# ==================== 出域脱敏（上报记录）====================
+
+
+def test_report_record_masks_and_truncates_outbound_fields() -> None:
+    """上报记录是出域数据：触发摘要与上下文都必须**脱敏**，而不是只截断。
+
+    改造前上报侧只做"截断前 100 字"，手机号 / 学号会原样落库、并随告警邮件
+    发给值班邮箱；而评测侧做正则脱敏却不截断——同一句话"已脱敏"有两种含义。
+    现在两侧共用 `infra/privacy.sanitize_outbound()`，本用例钉住上报侧的入参。
+    """
+    record = build_report_record(
+        user_id="u1",
+        trigger_text="我手机 13812345678，学号 20211234567，" + "很" * 200,
+        emotion_level=LEVEL_HIGH,
+        emotion_confidence=1.0,
+        recent_context=[
+            {"role": "user", "content": "我的手机是 13812345678"},
+            {"role": "assistant", "content": "我在听"},
+            {"role": "user", "content": "学号 20211234567，想退学"},
+            {"role": "user", "content": "最近这一轮"},
+        ],
+    )
+
+    summary = record["trigger_text_summary"]
+    assert "[手机号]" in summary
+    assert "[学号]" in summary
+    assert "13812345678" not in summary
+    assert "20211234567" not in summary
+    assert len(summary) <= 100  # 截断上限仍生效（脱敏后截断）
+
+    # 上下文：只保留最近 3 轮，逐条脱敏，role 等结构字段保留
+    context = record["recent_context"]
+    assert len(context) == 3
+    assert context[0] == {"role": "assistant", "content": "我在听"}
+    assert context[-1] == {"role": "user", "content": "最近这一轮"}
+    assert "20211234567" not in context[1]["content"]
+    assert "[学号]" in context[1]["content"]

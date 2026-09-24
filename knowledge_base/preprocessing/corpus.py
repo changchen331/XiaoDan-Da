@@ -265,7 +265,11 @@ _WHITESPACE_RE = re.compile(r"[\s\u3000]+")
 
 
 def normalize_for_match(text: str) -> str:
-    """归一化用于跨切分策略定位：去掉全部空白字符。"""
+    """归一化用于跨切分策略定位：去掉全部空白字符。
+
+    **评测/合成专用**：被 `evaluation/chunk_experiment.py` 与合成脚本使用，
+    生产链路不调用（生产只关心切分结果本身，不需要"定位原文"）。
+    """
     return _WHITESPACE_RE.sub("", text)
 
 
@@ -278,6 +282,8 @@ def locate_span(haystack: str, needle: str) -> str | None:
 
     空白不敏感：LLM 摘录原文时经常把换行、缩进改写成空格，
     逐字比对会把这类正确摘录误判为"不在原文中"。
+
+    **评测专用**：调用方只有 `evaluation/chunk_experiment.py`，生产链路不调用。
 
     :return: haystack 中的逐字切片；定位失败返回 None
     """

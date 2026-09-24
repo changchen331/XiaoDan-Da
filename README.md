@@ -262,9 +262,10 @@ XiaoDan-Da/
 ├── .env.example                  # 环境变量模板（含全部可调参数）
 ├── .github/workflows/ci.yml      # CI：push / PR 自动跑 lint + 边界自检 + 单测与覆盖率
 ├── config/settings.py            # 全局配置中心
-├── infra/                        # 基础设施：外部依赖适配层
+├── infra/                        # 基础设施：外部依赖适配层与跨模块策略
 │   ├── db.py                     #   PostgreSQL 连接（psycopg3，退出显式 close）
-│   └── llm_clients.py            #   LLM 客户端 + 三级降级链 + 思考模式开关
+│   ├── llm_clients.py            #   LLM 客户端 + 三级降级链 + 思考模式开关
+│   └── privacy.py                #   出域数据最小化（脱敏 + 截断，上报 / 评测共用）
 ├── agent/                        # 模块三：Agent 核心引擎
 │   ├── graph.py                  #   LangGraph 11 节点编排 + Checkpointer
 │   ├── state.py                  #   AgentState 与节点结果模型
@@ -307,7 +308,7 @@ XiaoDan-Da/
 ## 运行测试
 
 ```bash
-uv run pytest tests/ -v                      # 全量（79 项）
+uv run pytest tests/ -v                      # 全量（84 项）
 uv run pytest tests/test_llm_clients.py -v   # 只跑某个模块
 uv run ruff check .                          # 静态检查（只做 lint，不做 format）
 uv run python -m scripts.check_synced_boundary   # 仓库边界自检（入库文件不得提到本地专用路径）

@@ -214,6 +214,9 @@ def chunk_fixed_length(
     这是切分策略的**朴素基线**。保留它的意义在于让"分类型切分更好"这个判断
     可以被度量——没有基线就没有对照，任何"提升 N%"的说法都无法证伪。
     对照实验见 evaluation/chunk_experiment.py。
+
+    **评测专用**：唯一调用方是 `evaluation/chunk_experiment.py`，
+    生产链路（`build_index` → 线上检索）走 `chunk_by_type`，不调用本函数。
     """
     step = max(chunk_size - overlap, 1)
     return [

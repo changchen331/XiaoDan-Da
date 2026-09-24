@@ -14,6 +14,12 @@ import torch
 
 from config.settings import settings
 
+#: 输入截断长度（token）：情绪表达集中在文本前段，长文本截断不影响判断。
+#: **训练脚本从这里取同一个值**（`scripts/train_emotion_model.py`）——
+#: 此前训练与推理各写一个 128 字面量，两边不同步会导致
+#: "训练时按 128 截断、推理时按另一个长度截断"这种静默的行为漂移。
+MAX_INPUT_TOKENS = 128
+
 
 class EmotionClassifier:
     """微调后的 XLM-RoBERTa 情绪分类器。"""
@@ -41,13 +47,13 @@ class EmotionClassifier:
     def predict(self, text: str) -> dict:
         """输出四级情绪概率分布。
 
-        :param text: 用户输入文本（截断至 128 token，
+        :param text: 用户输入文本（截断至 `MAX_INPUT_TOKENS` 个 token，
             情绪表达集中在前段，长文本截断不影响判断）
         :return: {"正常": p0, "轻度困扰": p1, "中度困扰": p2, "高危": p3}，
             四项概率之和为 1
         """
         inputs = self.tokenizer(
-            text, return_tensors="pt", truncation=True, max_length=128
+            text, return_tensors="pt", truncation=True, max_length=MAX_INPUT_TOKENS
         )
         logits = self.model(**inputs).logits
         probs = torch.softmax(logits, dim=-1).squeeze(0).tolist()

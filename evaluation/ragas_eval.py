@@ -41,7 +41,6 @@ import asyncio
 import inspect
 import json
 import math
-import re
 
 import pandas as pd
 from ragas.embeddings import HuggingFaceEmbeddings
@@ -56,6 +55,7 @@ from ragas.metrics.collections import (
 
 from config.settings import settings
 from infra.llm_clients import build_judge_client
+from infra.privacy import sanitize_outbound
 
 # 并发上限：评测是 IO 密集型（等裁判 API 返回），并发能显著压缩总耗时；
 # 但裁判端点有速率限制，8 路是实测不触发限流的上限
@@ -71,25 +71,21 @@ TARGETS: dict = {
 }
 
 
-def sanitize_text(text: str) -> str:
-    """脱敏：替换手机号、学号等个人敏感信息。
-
-    评测数据可能来自真实学生提问，进入外部裁判 API 前必须清洗，
-    降低个人信息泄露风险。
-    """
-    text = re.sub(r"1[3-9]\d{9}", "[手机号]", text)
-    text = re.sub(r"\b\d{8,11}\b", "[学号]", text)
-    return text
-
-
 def sanitize_dataset(raw_data: dict) -> dict:
-    """对整个评测数据集脱敏（retrieved_contexts 为二维列表需逐层处理）。"""
+    """对整个评测数据集脱敏（retrieved_contexts 为二维列表需逐层处理）。
+
+    脱敏口径**不在这里定义**：统一走基础设施层的 `sanitize_outbound()`
+    （与高危上报共用同一判据，见 infra/privacy.py）。
+    评测侧不截断——裁判需要完整上下文才能打分。
+    """
     sanitized: dict = {}
     for key, values in raw_data.items():
         if key == "retrieved_contexts":
-            sanitized[key] = [[sanitize_text(ctx) for ctx in ctxs] for ctxs in values]
+            sanitized[key] = [
+                [sanitize_outbound(ctx) for ctx in ctxs] for ctxs in values
+            ]
         elif key in ("response", "user_input", "reference"):
-            sanitized[key] = [sanitize_text(value) for value in values]
+            sanitized[key] = [sanitize_outbound(value) for value in values]
         else:
             sanitized[key] = values
     return sanitized

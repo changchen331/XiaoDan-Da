@@ -118,8 +118,10 @@ class _FakeEmbedder:
 def _import_build_module(monkeypatch: pytest.MonkeyPatch):
     """导入建库流水线模块。
 
-    先注入假 embeddings：knowledge_base.faq 顶层会导入 embeddings
+    先注入假 embeddings：**本模块（build_index）顶层**会导入 embeddings
     （连带 FlagEmbedding，实测约 11s），单测不该为它付加载代价。
+    （FAQ 侧的重型导入已下沉到 `FAQIndex.__init__`，导入 `knowledge_base.faq`
+    不再触发加载，故这里只为 build_index 自己注入。）
     """
     import importlib
     import sys
@@ -256,19 +258,12 @@ def test_build_index_rebuild_skips_per_source_delete(
 def test_faq_build_clears_before_insert(monkeypatch: pytest.MonkeyPatch) -> None:
     """FAQ 重建：先清空既有行再写入，重跑不累积重复问答。
 
-    注：knowledge_base.faq 顶层会导入 embeddings（连带 FlagEmbedding，
-    实测约 11s），故先用 sys.modules 注入假 embeddings 再导入该模块。
+    注：`FAQIndex` 的重型依赖（embeddings / Milvus）是**实例化时才导入**的，
+    故这里替换的是它们所在模块的属性，而不再替换 `knowledge_base.faq` 的模块级符号；
+    embeddings 仍用 sys.modules 假模块顶掉，免得单测为 FlagEmbedding（约 11s）付代价。
     """
-    import importlib
     import sys
     import types
-
-    fake_embeddings = types.ModuleType("knowledge_base.indexing.embeddings")
-    fake_embeddings.get_embedder = lambda: None
-    monkeypatch.setitem(
-        sys.modules, "knowledge_base.indexing.embeddings", fake_embeddings
-    )
-    faq_module = importlib.import_module("knowledge_base.faq")
 
     calls: list = []
 
@@ -281,19 +276,27 @@ def test_faq_build_clears_before_insert(monkeypatch: pytest.MonkeyPatch) -> None
         def encode(self, texts: list) -> list:
             return [{"dense": [0.0], "sparse": {}} for _ in texts]
 
-    monkeypatch.setattr(faq_module, "get_milvus_client", lambda: _FakeClient())
-    monkeypatch.setattr(faq_module, "get_embedder", lambda: _FakeEmbedder())
+    fake_embeddings = types.ModuleType("knowledge_base.indexing.embeddings")
+    fake_embeddings.get_embedder = lambda: _FakeEmbedder()
+    monkeypatch.setitem(
+        sys.modules, "knowledge_base.indexing.embeddings", fake_embeddings
+    )
+
+    import knowledge_base.indexing.milvus_client as milvus_module
+    from knowledge_base.faq import FAQIndex
+
+    monkeypatch.setattr(milvus_module, "get_milvus_client", lambda: _FakeClient())
     monkeypatch.setattr(
-        faq_module, "ensure_collection_loaded", lambda client, name: None
+        milvus_module, "ensure_collection_loaded", lambda client, name: None
     )
 
     def _fake_insert(rows: list) -> int:
         calls.append(("insert", len(rows)))
         return len(rows)
 
-    monkeypatch.setattr(faq_module, "insert_faq_rows", _fake_insert)
+    monkeypatch.setattr(milvus_module, "insert_faq_rows", _fake_insert)
 
-    index = faq_module.FAQIndex()
+    index = FAQIndex()
     written = index.build(
         [
             {
@@ -310,6 +313,63 @@ def test_faq_build_clears_before_insert(monkeypatch: pytest.MonkeyPatch) -> None
     # 标准问题 + 1 条相似问法各占一行
     assert calls[1] == ("insert", 2)
     assert written == 2
+
+
+# ==================== FAQ 抽取残留过滤（scripts/build_faq.py）====================
+
+
+def test_build_faq_strips_trailing_section_title() -> None:
+    """答案的抽取残留必须清掉：尾部章节标题 / 控件文字、**开头多余的问句**、
+    以及被页面渲染断开的拉丁字母 / 数字 token。
+
+    抽取按编号标记切块，页面上的小标题（"其他问题""邮件客户端问题"）与
+    "查看原图"页的按钮文字（"返回 原图 /"）不属于任何条目，
+    会黏在**上一条答案末尾**；并列问法或下一问的原文会挤进**答案开头**；
+    渲染还会把 token 断开（"i map.exmail.qq.com"、"E xchange"、"5 0 MB"）。
+    而 FAQ 命中后答案**原样直返用户**，故这些噪声代价高。
+    本用例的样本取自改造前 `data/raw/faq.json` 的真实残留（见 07 登记 G9 / I5）。
+    """
+    from scripts.build_faq import (
+        _fix_broken_tokens,
+        _strip_leading_question,
+        _strip_trailing_residue,
+    )
+
+    # ① 尾部：章节标题 / 页面控件文字
+    assert (
+        _strip_trailing_residue("此时微信中有可能看不到提醒。 其他问题")
+        == "此时微信中有可能看不到提醒。"
+    )
+    assert (
+        _strip_trailing_residue("可以至电子论文平台查看。 返回 原图 /")
+        == "可以至电子论文平台查看。"
+    )
+
+    # ② 开头：多出来的一问（问句字段本身是干净的，残留落在答案头部）
+    assert (
+        _strip_leading_question(
+            "在哪里提交我的电子版学位学位论文？ 提交网址为 https://thesis.fudan.edu.cn/"
+        )
+        == "提交网址为 https://thesis.fudan.edu.cn/"
+    )
+
+    # ③ 渲染断开的 token：只合"单字母 + 空格 + 词"与"数字 + 空格 + 数字"，
+    #    正常的英文短语（词长 > 1）不受影响
+    assert (
+        _fix_broken_tokens("最大为5 0 MB，发出后 2 4 小时可撤回；见 i map.exmail.qq.com")
+        == "最大为50 MB，发出后 24 小时可撤回；见 imap.exmail.qq.com"
+    )
+    assert _fix_broken_tokens("the exam is over") == "the exam is over"
+
+
+def test_build_faq_keeps_short_answer_intact() -> None:
+    """剥离不得把一条短答案误删成空：剥完不足最小长度就保留原样。"""
+    from scripts.build_faq import _strip_trailing_residue
+
+    assert _strip_trailing_residue("可以") == "可以"
+    assert _strip_trailing_residue("由研究生院和院系做出规定。") == (
+        "由研究生院和院系做出规定。"
+    )
 
 
 # ==================== 附件元数据 sidecar ====================

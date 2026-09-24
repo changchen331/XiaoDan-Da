@@ -21,8 +21,12 @@
 **两种调用形态**（`mode` 参数）：
 - ``combined``：一次调用同时产出「级别 + 指向」（省一半延迟）
 - ``split``：分两次调用，级别判断不受指向任务干扰
+
 探针实测发现同调可能稀释级别判断，故保留两种形态供 A/B 实测择优
-（`evaluation/emotion_semantic_ab.py`）。生产默认走 A/B 胜出的形态。
+（`evaluation/emotion_semantic_ab.py`）。
+**A/B 结论（见 05-evidence 1.20）：两者安全指标持平，`combined` 快 57%，
+故生产链路固定走 `combined`**；`split` 分支保留**只为让 A/B 实验可复现**，
+生产不传该值（detector 走 `judge_semantic_stable`，其默认即 `combined`）。
 """
 
 from config.settings import settings
@@ -120,7 +124,8 @@ def judge_semantic(text: str, mode: str = "combined") -> dict:
     """对单条文本做语义判别。
 
     :param text: 用户原始输入
-    :param mode: ``combined``（级别+指向一次调用）或 ``split``（分两次调用）
+    :param mode: ``combined``（级别+指向一次调用）或 ``split``（分两次调用）；
+        **`split` 仅供 A/B 复现，生产固定用默认的 `combined`**
     :return: {"level", "referent", "source"}
         - level: 四级情绪等级（取值同 settings.EMOTION_LABELS）
         - referent: 指向标签（本模块 REFERENT_LABELS 之一）

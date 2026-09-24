@@ -2,10 +2,13 @@
 
 用法：
     # 训练语料：100 条，高危占比 30%
-    python scripts/synthesize_emotion_corpus.py --out data/eval/emotion_train.json
+    python -m scripts.synthesize_emotion_corpus --out data/eval/emotion_train.json
+
+注：必须用 `python -m` 从仓库根目录运行（直接执行脚本时仓库根不在 `sys.path` 上，
+`config` / `emotion` / `infra` 等顶层包会 import 失败）。
 
     # 评测集：40 条，并排除训练语料中的重复表达
-    python scripts/synthesize_emotion_corpus.py --out data/eval/emotion_eval.json \
+    python -m scripts.synthesize_emotion_corpus --out data/eval/emotion_eval.json \
         --count 40 --exclude data/eval/emotion_train.json
 
 为什么用合成语料而不是公开数据集（v2 的取舍，理由需要写清楚）：

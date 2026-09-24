@@ -17,6 +17,11 @@
    Playwright 无头浏览器渲染后再取 DOM（需先执行 playwright install chromium）
    注意：渲染只能解决"前端不直出 HTML"的问题，解决不了"内容需登录"的问题
 
+   **当前未启用**：14 个数据源的 `render_detail` 全为 `False`，线上不会走到这条路径——
+   它作为**已实现但未启用的能力**保留，供将来接入 SPA 站点时打开。
+   实站验证结论：渲染链路本身可用（能取到渲染后 DOM），但当初的目标站点
+   （教务处）渲染后是统一身份认证登录页，故该源最终未纳入数据源。
+
 增量机制：以 URL 的 MD5 为去重标识，已抓取的 URL 记录在
 data/processed/crawled_urls.json 中，重复爬取时自动跳过。附件 URL 同样入表。
 
@@ -63,9 +68,11 @@ from knowledge_base.preprocessing.cleaner import INVISIBLE_CHAR_RE, clean_text
 # valid_semester："长期有效"（规章制度、常用文档类）或 "发布学期"
 #                 （通知、动态类，按发布月份推算学期，使过期通知被时效过滤挡掉）
 # max_pages：该源最多抓取的分页数（列表页每页约 10-14 条）
-# render_detail：详情页是否需 Playwright 渲染（Vue SPA 站点开启；列表页均为静态模板，
-#                始终按普通 GET 抓取）。当前数据源均无需渲染，该开关作为能力保留，
-#                供后续接入 SPA 站点时使用（渲染链路已在实站验证可用）。
+# render_detail：详情页是否需 Playwright 渲染（Vue SPA 站点开启；列表页均为静态模板、
+#                始终按普通 GET 抓取）。**当前 14 个源全部为 False，即渲染路径线上不启用**；
+#                该开关与渲染实现作为能力保留，供后续接入 SPA 站点时使用。
+#                实站验证过链路可用（能渲染并取到 DOM），但当时目标站点（教务处）渲染后
+#                是登录页——渲染解决不了权限墙，故该源未纳入数据源。
 DATA_SOURCES: tuple = (
     # ---------- 研究生类（静态详情页，正文多为 PDF 附件）----------
     {
