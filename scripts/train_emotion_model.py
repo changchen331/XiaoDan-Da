@@ -95,10 +95,11 @@ class EmotionDataset:
 
 
 class WeightedTrainer(Trainer):
-    """带类别权重的 Trainer：高危样本的损失按 3 倍计。
+    """带类别权重的 Trainer：损失按**逆频次权重**加权（倍率由语料分布算出，不写死）。
 
     原生 Trainer 使用等权 CrossEntropy，本子类只覆写 compute_loss 一处，
     其余训练逻辑（梯度累积 / 混合精度 / 日志）全部复用父类实现。
+    权重从何而来见 `inverse_frequency_weights` 与模块 docstring 的"v2 实测教训"。
     """
 
     def __init__(self, *args, class_weights=None, **kwargs) -> None:
@@ -345,7 +346,9 @@ if __name__ == "__main__":
         help="训练语料路径（JSON 数组，含 text/label 字段）",
     )
     parser.add_argument(
-        "--val", default=None, help="验证语料路径，缺省时从训练集分层切出 20%%"
+        "--val",
+        default=None,
+        help="验证语料路径；**缺省为全量训练**：不切验证集、不早停、不选优，只打印指标",
     )
     parser.add_argument(
         "--epochs",

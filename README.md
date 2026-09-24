@@ -259,6 +259,7 @@ XiaoDan-Da/
 ├── uv.lock                       # 依赖锁定（uv sync 按此精确安装）
 ├── docker-compose.yml            # 服务编排（Milvus/PostgreSQL/API/Langfuse）
 ├── .env.example                  # 环境变量模板（含全部可调参数）
+├── .github/workflows/ci.yml      # CI：push / PR 自动跑 lint + 边界自检 + 单测与覆盖率
 ├── config/settings.py            # 全局配置中心
 ├── infra/                        # 基础设施：外部依赖适配层
 │   ├── db.py                     #   PostgreSQL 连接（psycopg3，退出显式 close）
@@ -290,7 +291,7 @@ XiaoDan-Da/
 │   └── red_team.py               #   安全红队测试（30 用例）
 ├── observability/                # Langfuse 全链路追踪（开关式）
 ├── deployment/                   # 模块五：FastAPI 服务 + Dockerfile
-├── scripts/                      # 索引构建 / FAQ 题库抽取 / 语料与评测集合成 / 情绪模型训练
+├── scripts/                      # 索引构建 / FAQ 题库抽取 / 语料与评测集合成 / 情绪模型训练 / 仓库边界自检
 ├── tests/                        # 单元测试（按模块对齐拆分，无外部依赖）
 │   ├── test_llm_clients.py       #   三级降级链 / 连接复用 / 思考模式开关 / 应答来源上报
 │   ├── test_agent_nodes.py       #   意图路由与语言偏好 / FAQ 轻量校验 / 关怀后缀 / 条件路由 / 红队回归
@@ -305,9 +306,15 @@ XiaoDan-Da/
 ## 运行测试
 
 ```bash
-uv run pytest tests/ -v                      # 全量
+uv run pytest tests/ -v                      # 全量（78 项）
 uv run pytest tests/test_llm_clients.py -v   # 只跑某个模块
+uv run ruff check .                          # 静态检查（只做 lint，不做 format）
+uv run python -m scripts.check_synced_boundary   # 仓库边界自检（入库文件不得提到本地专用路径）
+uv run pytest tests/ -q --cov=agent --cov=emotion --cov=infra --cov=config --cov=knowledge_base --cov-report=term   # 覆盖率（只报告，不设门槛）
 ```
+
+以上三项（lint / 边界自检 / 单测与覆盖率）在 CI 中每次 push 与 PR 自动执行，
+配置见 `.github/workflows/ci.yml`。
 
 覆盖规则引擎、切分策略、文本清洗、三级降级、FAQ 校验信任策略与匹配/校验输入口径、关怀后缀分级、
 条件路由、意图兜底与语言偏好、学期计算、JSON 解析、思考模式开关、数据库连接、

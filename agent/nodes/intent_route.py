@@ -102,7 +102,6 @@ def intent_route(state: AgentState) -> dict:
     return {
         "intent": IntentResult(
             category=category,
-            confidence=0.9,
             rewritten_query=rewritten_query,
         ),
         "response_language": response_language,

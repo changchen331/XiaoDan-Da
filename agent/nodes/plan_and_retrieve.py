@@ -6,10 +6,10 @@
 
 执行流程：
 1. 轻量模型将复杂问题拆解为 2-4 个独立的子查询
-2. 每个子查询独立走混合检索（top10）
+2. 每个子查询独立走混合检索（候选数 10，见 hybrid_search 调用处的 top_k）
 3. 按 chunk 文本哈希合并去重（同一文档可能被多个子查询命中）
-4. Reranker 以原始问题为锚做全局重排，取 top8
-   （比简单问答的 top5 略宽：复杂问题需要更多素材做综合）
+4. Reranker 以原始问题为锚做全局重排，取 `settings.RERANK_TOP_K + 3` 段
+   （比简单问答略宽：复杂问题需要更多素材做综合；具体数字由配置决定，不写死）
 """
 from agent.query_filter import build_filter_expr
 from agent.state import AgentState

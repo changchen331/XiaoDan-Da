@@ -4,6 +4,9 @@
 - 只存必要的中间结果，不存冗余数据，避免 State 随轮次膨胀
 - 每个节点只读自己需要的字段、只写自己产出的字段，节点之间通过 State 解耦
 - 全部字段 total=False：构造初始 State 时允许只传部分键（LangGraph 增量合并）
+- **只写不读的字段一律删掉**：曾经存在的 `should_end` / `memory_summary` 就属于
+  这一类（流程结束实际由 `route_after_care_suffix` 决定，摘要只写库不进 State）。
+  留着它们会让读者以为有消费方，误判链路。
 """
 
 from typing import Literal, TypedDict, get_args
@@ -29,7 +32,6 @@ class IntentResult(BaseModel):
     """意图路由结果（由轻量模型产出）。"""
 
     category: Literal["简单问答", "复杂查询", "FAQ", "闲聊越界"]
-    confidence: float
     rewritten_query: str  # 改写后的检索 query（口语 → 精准检索语句）
 
 
@@ -83,12 +85,8 @@ class AgentState(TypedDict, total=False):
     quality: QualityResult | None
     retry_count: int  # 质量不合格时的重试计数
 
-    # ===== 记忆相关 =====
-    memory_summary: str  # 本轮对话摘要（写入长期记忆）
-
-    # ===== 输出控制 =====
+    # ===== 输出 =====
     final_response: str  # 最终输出给用户的回答
-    should_end: bool  # 是否结束流程
 
 
 # ==================== 取值单一来源 ====================

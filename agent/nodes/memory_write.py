@@ -1,7 +1,7 @@
 """节点：记忆写入——本轮对话摘要写入长期记忆，职责纯化不再触碰回复内容。
 
 职责边界（上游 care_suffix 已产出 final_response）：
-- 本节点只负责记忆：生成摘要 + 写库 + 结束标记
+- 本节点只负责记忆：生成摘要 + 写库
 - 回复加工（分级关怀后缀等）一律由 care_suffix 节点承担，
   两者通过 State 解耦，各自可独立演化与测试
 
@@ -22,7 +22,7 @@ SUMMARY_PROMPT = """请用一句话概括以下对话的核心信息，包括用
 
 
 def memory_write(state: AgentState) -> dict:
-    """生成本轮对话摘要写入长期记忆，透传 final_response 并结束流程。"""
+    """生成本轮对话摘要写入长期记忆，不修改 State。"""
     user_input = state["user_input"]
     response = state["final_response"]
     user_id = state.get("user_id", "anonymous")
@@ -44,4 +44,4 @@ def memory_write(state: AgentState) -> dict:
         intent=intent.category if intent else "简单问答",
     )
 
-    return {"memory_summary": summary, "should_end": True}
+    return {}  # 不修改 State：摘要在本节点就写进了 user_memory 表

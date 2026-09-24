@@ -185,9 +185,7 @@ def test_care_response_appends_conversation_history(
 def _intent_state(category: str) -> dict:
     """构造意图路由单测所需的最小 State。"""
     return {
-        "intent": IntentResult(
-            category=category, confidence=0.9, rewritten_query="测试查询"
-        )
+        "intent": IntentResult(category=category, rewritten_query="测试查询"),
     }
 
 
@@ -358,13 +356,12 @@ def test_memory_write_passthrough_final_response(
         "user_id": "u1",
         "session_id": "s1",
         "intent": IntentResult(
-            category="简单问答", confidence=0.9, rewritten_query="选课截止时间"
+            category="简单问答", rewritten_query="选课截止时间"
         ),
     }
     result = memory_write_module.memory_write(state)
-    # 职责纯化：不再写 final_response（回复加工由 care_suffix 承担）
-    assert "final_response" not in result
-    assert result["should_end"] is True
+    # 职责纯化：不碰回复内容、不写 State——摘要只进 user_memory 表
+    assert result == {}
     assert captured["intent"] == "简单问答"
     assert captured["summary"] == "用户问了选课截止时间"
 
@@ -514,7 +511,7 @@ def test_retrieve_relaxes_retrieval_on_retry(monkeypatch: pytest.MonkeyPatch) ->
     state = {
         "user_input": "选课截止时间",
         "intent": IntentResult(
-            category="简单问答", confidence=0.9, rewritten_query="选课截止时间"
+            category="简单问答", rewritten_query="选课截止时间"
         ),
         "user_profile": {"role": "本科生"},
         "retry_count": 0,

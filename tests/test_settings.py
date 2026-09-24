@@ -50,8 +50,6 @@ def test_agent_state_fields() -> None:
         "generated_response",
         "quality",
         "retry_count",
-        "memory_summary",
         "final_response",
-        "should_end",
     }
     assert expected.issubset(set(AgentState.__annotations__))

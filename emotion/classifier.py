@@ -18,17 +18,19 @@ from config.settings import settings
 class EmotionClassifier:
     """微调后的 XLM-RoBERTa 情绪分类器。"""
 
-    def __init__(self, model_path: str | None = None) -> None:
+    def __init__(self) -> None:
         """加载微调后的模型权重。
 
-        :param model_path: 模型目录，默认取 settings.EMOTION_MODEL_PATH
-            （由 scripts/train_emotion_model.py 训练产出，含 config.json）
+        路径固定取 settings.EMOTION_MODEL_PATH（由 scripts/train_emotion_model.py
+        训练产出，含 config.json）。此前这里有个 `model_path` 参数，
+        但全仓没有任何调用点传它——留着只会让读者以为存在"多模型切换"能力。
+
         :raises OSError: 模型路径不存在时由 transformers 抛出，
             由 detector 层捕获并降级为纯规则引擎
         """
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        path = model_path or settings.EMOTION_MODEL_PATH
+        path = settings.EMOTION_MODEL_PATH
         self.tokenizer = AutoTokenizer.from_pretrained(path)
         self.model = AutoModelForSequenceClassification.from_pretrained(path)
         self.model.eval()

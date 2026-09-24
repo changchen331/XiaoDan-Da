@@ -74,8 +74,9 @@ class Settings:
     # 本地兜底模型：**仅当云端端点全部不可用时**接管轻量任务。
     #
     # 存在的意义是恢复"真正的离线可用性"——当前主用端点与降级端点（DeepSeek）
-    # 都在云端，断网即全挂。模型选型待定，故默认关闭；
-    # 选定后填入 FALLBACK_LLM_MODEL 并置 FALLBACK_LLM_ENABLED=true 即可生效。
+    # 都在云端，断网即全挂。默认关闭：它要求部署方本机备好推理框架与权重
+    # （实测选型 Ollama + Qwen2.5-7B-Instruct，冷启动载入权重 88s，故超时给得宽）。
+    # 填入 FALLBACK_LLM_MODEL 并置 FALLBACK_LLM_ENABLED=true 即可生效。
     #
     # 本组**描述位置（本地）+ 角色（兜底）**，与 LIGHT_LLM_* 的命名维度不同，这是有意为之。
     FALLBACK_LLM_ENABLED: bool = (

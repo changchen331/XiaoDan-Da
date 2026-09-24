@@ -11,7 +11,8 @@ Docker 环境由 docker-compose 编排启动（见 docker-compose.yml 的 xiaoda
 
 安全设计：
 - user_id 一律使用调用方传入的内部 ID，服务端不采集姓名 / 学号
-- 请求体大小由 FastAPI 默认限制约束，防止超长文本攻击
+- 输入长度是**显式配置**的（`user_input` 的 `max_length=4000`，见 ChatRequest），
+  而非依赖框架默认值——默认值随版本变化，安全边界不该跟着漂
 """
 
 from fastapi import FastAPI

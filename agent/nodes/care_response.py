@@ -80,6 +80,5 @@ def care_response(state: AgentState) -> dict:
 
     return {
         "final_response": content,
-        "should_end": True,
         "conversation_history": history[-settings.HISTORY_MAX_ROUNDS * 2 :],
     }
