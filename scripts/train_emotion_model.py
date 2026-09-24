@@ -191,7 +191,7 @@ def compute_metrics(eval_prediction) -> dict:
     实测两次退化都发生在 epoch 1，且都被 metric_for_best_model 选中。
     因此模型选择改用高危 F1（精确率与召回率的调和平均），
     退化解在此指标上得 0.46，而正常模型约 0.6，方向正确。
-    硬性上线门槛仍只看召回率（阶段一的结论指标）。
+    硬性上线门槛仍只看召回率（漏报一条真危机的代价远高于多报一条）。
     """
     predictions = np.argmax(eval_prediction.predictions, axis=-1)
     labels = eval_prediction.label_ids

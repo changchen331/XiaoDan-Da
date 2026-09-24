@@ -1,0 +1,43 @@
+# ============================================================
+# 持续集成：每次 push / PR 自动跑 lint 与单元测试
+#
+# 只做三件事，不铺矩阵与多平台（单机开发项目，收益不抵维护成本）：
+#   1. ruff check —— 卡住未使用导入 / 未定义名 / 导入乱序
+#   2. 同步边界自检 —— 入库文件不得提到本地专用路径
+#   3. pytest     —— 74 项单测（不依赖任何外部服务：LLM / 数据库 / 向量库全部 mock）
+#
+# 首次运行需按 uv.lock 下载 CUDA 版 torch（约 2.4GB）；已开启 uv 缓存，
+# 后续运行不必重复下载。若想再快，可确认单测不依赖 torch 后改用
+# `uv sync --dev --no-install-package torch`。
+# ============================================================
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv（启用依赖缓存）
+        uses: astral-sh/setup-uv@v5 # 版本按需升级
+        with:
+          enable-cache: true
+
+      - name: 按锁文件安装依赖
+        run: uv sync --dev --frozen
+
+      - name: 代码检查（ruff）
+        run: uv run ruff check .
+
+      - name: 同步边界自检（入库文件不得提到本地专用路径）
+        run: uv run python -m scripts.check_synced_boundary
+
+      - name: 单元测试 + 覆盖率报告
+        run: >
+          uv run pytest tests/ -q
+          --cov=agent --cov=emotion --cov=infra --cov=config --cov=knowledge_base
+          --cov-report=term-missing

@@ -38,7 +38,7 @@ class BGEM3Embedder:
         （这是它与 bge-*-v1.5 系列的关键区别，后者才需为检索语句加前缀）。
         此前这里有个 ``is_query`` 参数，docstring 宣称"差异化编码"实际却是
         空操作——已删除，避免后人信以为真；将来若换用需要前缀的模型，
-        必须真实实现，而不是用空参数占位（v2-plan 2.1 #9）。
+        必须真实实现，而不是用空参数占位。
 
         :param texts: 文本列表（入库 chunk 与用户 query 同构处理）
         :return: [{"dense": list[float], "sparse": dict[int, float]}, ...]

@@ -10,7 +10,7 @@
 from agent.nodes.care_response import care_response
 from agent.nodes.care_suffix import care_suffix, route_after_care_suffix
 from agent.nodes.chitchat_response import chitchat_response
-from agent.nodes.emotion_detect import emotion_detect
+from agent.nodes.emotion_detect import emotion_detect, route_after_emotion
 from agent.nodes.generate import generate
 from agent.nodes.intent_route import intent_route, route_after_intent
 from agent.nodes.memory_write import memory_write
@@ -18,7 +18,6 @@ from agent.nodes.plan_and_retrieve import plan_and_retrieve
 from agent.nodes.quality_check import quality_check, route_after_quality
 from agent.nodes.report import report
 from agent.nodes.retrieve import retrieve, route_after_retrieve
-from agent.nodes.emotion_detect import route_after_emotion
 
 __all__ = [
     "emotion_detect", "report", "care_response", "intent_route",

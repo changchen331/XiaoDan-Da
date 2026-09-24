@@ -8,7 +8,6 @@ import pytest
 from knowledge_base.preprocessing.chunker import chunk_by_type
 from knowledge_base.preprocessing.cleaner import clean_text
 
-
 # ==================== 切分策略 ====================
 
 
@@ -52,7 +51,7 @@ def test_cleaner_removes_noise() -> None:
     assert "正文第一段" in cleaned
 
 
-# ==================== 索引重建幂等（v2-plan 2.1 #7） ====================
+# ==================== 索引重建幂等 ====================
 
 
 def test_delete_chunks_by_source_uses_metadata_filter(
@@ -138,7 +137,7 @@ def test_faq_build_clears_before_insert(monkeypatch: pytest.MonkeyPatch) -> None
     assert written == 2
 
 
-# ==================== 附件元数据 sidecar（v2-plan 2.1 #12） ====================
+# ==================== 附件元数据 sidecar ====================
 
 
 def test_crawler_writes_sidecar_for_attachment(
@@ -224,11 +223,11 @@ def test_corpus_metadata_priority_header_over_sidecar(tmp_path: Path) -> None:
     assert from_header["metadata"]["target_audience"] == "本科生"
 
 
-# ==================== 大 PDF 解析可观测性（v2-plan 2.1 #5） ====================
+# ==================== 大 PDF 解析可观测性 ====================
 
 
 def test_parse_file_task_reports_elapsed(tmp_path: Path) -> None:
-    """单文件解析耗时随结果返回：主进程靠它汇总"最慢文件"（2.1 #5）。"""
+    """单文件解析耗时随结果返回：主进程靠它汇总"最慢文件"。"""
     from knowledge_base.preprocessing.corpus import _parse_file_task
 
     notice = tmp_path / "通知" / "x.txt"

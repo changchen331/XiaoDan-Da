@@ -3,8 +3,7 @@
 import pytest
 
 from agent.state import EmotionResult, IntentResult
-from config.settings import get_current_semester, settings
-
+from config.settings import settings
 
 # ==================== FAQ 轻量校验 ====================
 
@@ -358,7 +357,7 @@ def test_memory_write_passthrough_final_response(
     assert captured["summary"] == "用户问了选课截止时间"
 
 
-# ==================== FAQ 快路径：匹配与校验的输入口径（阶段三 #1/#3） ====================
+# ==================== FAQ 快路径：匹配与校验的输入口径 ====================
 
 
 class _StubFaqIndex:
@@ -428,7 +427,7 @@ def test_faq_precheck_takes_higher_score_of_both_queries(
     assert matched["score"] == 0.95
 
 
-# ==================== 红队失败项回归（v2-plan 2.1 #13） ====================
+# ==================== 红队失败项回归（隐私 / 功利选课） ====================
 
 
 def test_generation_prompts_cover_red_team_failures() -> None:
@@ -451,7 +450,7 @@ def test_generation_prompts_cover_red_team_failures() -> None:
     assert "功利选课" in CHITCHAT_SYSTEM
 
 
-# ==================== 质检重试放宽检索（v2-plan 2.1 #4） ====================
+# ==================== 质检重试放宽检索 ====================
 
 
 def test_retrieve_relaxes_retrieval_on_retry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -516,3 +515,120 @@ def test_retrieve_relaxes_retrieval_on_retry(monkeypatch: pytest.MonkeyPatch) ->
     retrieve_module.retrieve(state)
     assert captured["top_k"] == settings.HYBRID_TOP_K * 3
     assert captured["rerank_top_k"] == settings.RERANK_TOP_K + 4
+
+
+# ==================== 上报：危险表达的指向标注 ====================
+
+
+def _alert_state(referent: str | None) -> dict:
+    """构造上报节点所需的 State（高危 + 指定指向）。"""
+    return {
+        "user_input": "我室友说他活不下去了",
+        "user_id": "u1",
+        "session_id": "s1",
+        "conversation_history": [],
+        "emotion": EmotionResult(
+            level="高危", source="规则引擎", confidence=1.0, referent=referent
+        ),
+    }
+
+
+def test_report_keeps_detector_referent_without_extra_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """检测侧已给出指向时直接入库：不再补标注，也就不产生额外 LLM 调用。"""
+    import importlib
+
+    report_module = importlib.import_module("agent.nodes.report")
+    captured: dict = {}
+    spawned: list = []
+
+    def _fake_submit(record: dict) -> int:
+        captured.update(record)
+        return 1
+
+    monkeypatch.setattr(report_module, "submit_report", _fake_submit)
+    monkeypatch.setattr(
+        report_module, "_annotate_referent_async", lambda *args: spawned.append(args)
+    )
+
+    assert report_module.report(_alert_state(referent="他人")) == {}
+    assert captured["referent"] == "他人"
+    assert spawned == []
+
+
+def test_report_spawns_annotation_for_rule_high_risk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """规则命中的高危：指向未知 → 提交后交由**后台**补标注（不占用用户路径）。"""
+    import importlib
+
+    report_module = importlib.import_module("agent.nodes.report")
+    captured: dict = {}
+    spawned: list = []
+
+    def _fake_submit(record: dict) -> int:
+        captured.update(record)
+        return 7
+
+    monkeypatch.setattr(report_module, "submit_report", _fake_submit)
+    monkeypatch.setattr(
+        report_module, "_annotate_referent_async", lambda *args: spawned.append(args)
+    )
+
+    report_module.report(_alert_state(referent=None))
+    assert captured["referent"] is None
+    assert spawned == [(7, "我室友说他活不下去了")]
+
+
+def test_report_skips_annotation_when_write_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """写库失败（无记录 id）时不必再补标注：没有可回写的行。"""
+    import importlib
+
+    report_module = importlib.import_module("agent.nodes.report")
+    spawned: list = []
+    monkeypatch.setattr(report_module, "submit_report", lambda record: None)
+    monkeypatch.setattr(
+        report_module, "_annotate_referent_async", lambda *args: spawned.append(args)
+    )
+
+    report_module.report(_alert_state(referent=None))
+    assert spawned == []
+
+
+def test_annotation_writes_referent_and_swallows_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """补标注：把指向写回记录；语义层故障时只打日志，不影响上报本身。"""
+    import importlib
+
+    import agent.llm_clients as llm
+
+    report_module = importlib.import_module("agent.nodes.report")
+    written: list = []
+
+    monkeypatch.setattr(settings, "EMOTION_SEMANTIC_ENABLED", True)
+    monkeypatch.setattr(report_module, "judge_referent", lambda text: "他人")
+    monkeypatch.setattr(
+        report_module,
+        "annotate_alert_referent",
+        lambda alert_id, referent: written.append((alert_id, referent)),
+    )
+
+    report_module._annotate_referent(7, "我室友说他活不下去了")
+    assert written == [(7, "他人")]
+
+    def _outage(text: str) -> str:
+        raise llm.LLMUnavailableError("三跳均失败")
+
+    monkeypatch.setattr(report_module, "judge_referent", _outage)
+    report_module._annotate_referent(7, "我室友说他活不下去了")  # 不得抛出
+    assert written == [(7, "他人")]
+
+    # 开关关闭：不在安全路径上引入外部调用
+    monkeypatch.setattr(settings, "EMOTION_SEMANTIC_ENABLED", False)
+    monkeypatch.setattr(report_module, "judge_referent", lambda text: "本人")
+    report_module._annotate_referent(7, "我室友说他活不下去了")
+    assert written == [(7, "他人")]

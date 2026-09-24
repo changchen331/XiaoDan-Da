@@ -5,7 +5,7 @@
 规则引擎命中 **0/18**、微调模型命中 **0/18**——即当前端到端高危召回为 **0%**。
 这一层就是为了补上这个漏报：由云端 LLM 做语义级识别。
 
-**设计要点**（阶段 11 评审结论，不是"再加一个模型重判一遍"）：
+**设计要点**（评审结论，不是"再加一个模型重判一遍"）：
 1. 顺序：规则快路径在最前（零延迟拦截显式高危），本层**接在规则之后**，
    只复核"规则未命中高危"的消息。
 2. 问的**不是**"再判一次级别"，而是**事实抽取：危险表达指向谁**——
@@ -21,7 +21,7 @@
 **两种调用形态**（`mode` 参数）：
 - ``combined``：一次调用同时产出「级别 + 指向」（省一半延迟）
 - ``split``：分两次调用，级别判断不受指向任务干扰
-阶段 11 的探针发现同调可能稀释级别判断，故保留两种形态供 A/B 实测择优
+探针实测发现同调可能稀释级别判断，故保留两种形态供 A/B 实测择优
 （`evaluation/emotion_semantic_ab.py`）。生产默认走 A/B 胜出的形态。
 """
 
@@ -181,6 +181,25 @@ def judge_semantic_stable(text: str, mode: str = "combined") -> dict:
         if best["level"] == settings.EMOTION_LABELS[3]:  # 已到最高档，无需再采样
             break
     return best
+
+
+def judge_referent(text: str) -> str:
+    """只抽取"危险表达指向谁"（不判级别）。
+
+    存在的理由：**规则命中高危时检测流程直接返回**（显式高危必须零延迟、
+    不依赖外部服务），那条路径上 referent 恒为 None——于是"我室友说他活不下去了"
+    会与本人危机混在同一条上报记录里。上报环节用本函数补一次指向标注，
+    它**不参与定级、不改变面向用户的关怀响应**。
+
+    :param text: 用户原始输入
+    :return: 指向标签（REFERENT_LABELS 之一）
+    :raises LLMUnavailableError: 降级链耗尽
+    :raises ValueError: 模型输出无法解析或取值非法
+    """
+    raw, _source = chat_qwen_json_with_source(
+        REFERENT_PROMPT.format(text=text), _SYSTEM
+    )
+    return _parse_referent(raw)
 
 
 def _parse_level(raw: str) -> str:

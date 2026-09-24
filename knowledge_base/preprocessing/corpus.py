@@ -179,7 +179,7 @@ def iter_document_records(
     records.sort(key=lambda record: record["path"])
 
     # 性能可观测性：把本轮最慢的几篇打出来。单篇大 PDF 的解析速度本身压不动
-    # （整库已从小时级降到分钟级），但"哪几篇慢、慢多少"必须随时可见（2.1 #5）
+    # （整库已从小时级降到分钟级），但"哪几篇慢、慢多少"必须随时可见
     if parse_seconds:
         slowest = sorted(parse_seconds, key=lambda item: item[1], reverse=True)[:3]
         detail = "；".join(f"{name} {seconds:.1f}s" for name, seconds in slowest)
@@ -242,7 +242,7 @@ def _parse_file_task(task: tuple) -> tuple:
     return cache_key, {
         "fingerprint": fingerprint,
         # 单文件解析耗时（秒），由主进程汇总"最慢文件"——单篇大 PDF 的解析速度
-        # 无法在算法层压缩（v2 已按文件多进程），至少要让它可观测（2.1 #5）
+        # 无法在算法层压缩（已按文件多进程），至少要让它可观测
         "elapsed": time.perf_counter() - started,
         "record": {
             "path": cache_key,
@@ -359,7 +359,7 @@ def _load_sidecar_meta(file_path: str) -> dict:
     """读取附件旁挂的元数据文件（``<文件名>.meta.json``，爬虫下载附件时写入）。
 
     附件正文没有【适用对象】【生效学期】这类头部行，若不带元数据，
-    人群 / 时效过滤对附件完全失效（v2-plan 2.1 #12）。
+    人群 / 时效过滤对附件完全失效。
     文件缺失或损坏时返回空字典——回退默认值，不阻断建库。
 
     :return: 与通知 txt 头部同名键的元数据字典（可能为空）

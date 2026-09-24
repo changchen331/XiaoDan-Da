@@ -58,7 +58,38 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    # 覆盖率：先只出报告、不设门槛（"67 项"是数量，不等于覆盖度）
+    "pytest-cov>=6.0.0",
+    # 代码检查：只做 check、不做 format（理由见下方 [tool.ruff]）
+    "ruff>=0.16.0",
 ]
+
+# ============================================================
+# 代码检查（ruff）：只做 lint、不做 format
+#
+# 为什么不启用 formatter：本仓库的表格对齐与注释缩进是人工维护的，
+# 一次性全仓重排会产生大量与语义无关的 diff，把真实改动埋掉。
+# 因此这里只开"能发现错误"的规则，不开"改写排版"的规则。
+# ============================================================
+[tool.ruff]
+# 目标版本决定 UP 规则敢改到什么程度（本项目 requires-python >= 3.10）
+target-version = "py310"
+# 约定的行宽。**刻意不启用 E501**：本仓库注释以中文为主，
+# 字符数不是视觉宽度的可靠代理，逐行卡字符数只会逼出无意义的换行
+line-length = 100
+
+[tool.ruff.lint]
+# E4/E7/E9 + F 是 ruff 的默认集（导入规范 / 未定义名 / 语法错误 / pyflakes），
+# 另加两项低争议、可自动修复的规则：
+#   I  导入排序（人工维护容易漂移）
+#   UP 按目标版本升级过时写法（如 Optional[X] → X | None）
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# 该文件的导入顺序是**功能性的**，不是风格问题：必须先导入 config.settings
+# 触发 load_dotenv()，再导入 huggingface_hub（它在导入时读取 HF_ENDPOINT 并固化）。
+# 排序规则会把两者调换，等于让国内镜像配置静默失效——故豁免。
+"knowledge_base/indexing/embeddings.py" = ["I001"]
 
 # 包索引：阿里云镜像为主（国内网络访问 PyPI 慢且易超时）；
 # 海外使用者可临时覆盖：UV_DEFAULT_INDEX=https://pypi.org/simple uv sync

@@ -14,10 +14,13 @@
 
 **为什么"降级"不在这一层**：规则命中高危时第一层已直接返回，不再走后续各层——
 显式高危的响应必须零延迟、且不依赖任何外部服务。代价是"代他人求助"这类
-规则误报不会被语义层下调（已登记为待评估项）。
+规则误报**不会被本层下调**：该标注改由上报环节在**后台**补（见
+`agent/nodes/report.py`），既不改定级、也不占用用户路径。
 
 性能设计：分类器为进程级单例（模型加载耗时数秒，绝不能每条消息重载）。
 """
+
+import threading
 
 from agent.llm_clients import LLMUnavailableError
 from config.settings import settings
@@ -30,6 +33,11 @@ _rule_engine: "RuleEngine | None" = None
 _classifier = None
 # 分类器可用性标记：首次加载失败后置 False，避免每条消息重复尝试加载
 _classifier_unavailable = False
+# 分类器初始化锁：初始化不是原子操作（导入 transformers + 加载权重耗时数秒），
+# 并发首请求下多个线程会同时进入构造，实测其中一个会拿到**半初始化的
+# transformers** 并抛 ImportError；而异常分支会把 _classifier_unavailable 置真，
+# 等于**整个进程此后永久降级为纯规则引擎**（串行调用不复现，故极易漏测）
+_classifier_lock = threading.Lock()
 
 
 def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
@@ -155,9 +163,12 @@ def _predict_with_model(text: str) -> dict | None:
 
     try:
         if _classifier is None:
-            from emotion.classifier import EmotionClassifier
+            # 双重检查：等锁期间可能已被先到的线程初始化完成，不必再构造一次
+            with _classifier_lock:
+                if _classifier is None:
+                    from emotion.classifier import EmotionClassifier
 
-            _classifier = EmotionClassifier()
+                    _classifier = EmotionClassifier()
         return _classifier.predict(text)
     except Exception as load_error:
         # 模型路径不存在 / transformers 依赖异常等：打印日志并永久降级

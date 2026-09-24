@@ -17,6 +17,9 @@
   现行型号默认开启思考，代价是 temperature 被厂商改写（千问：小于 0.6 的值自动调整
   为 0.6）且思考 token 按输出价计费，而本项目要的是低温度下的确定性输出
 - 端点不可达 / 鉴权失败时**跳过一次注定失败的重试**，直接进入下一跳
+- 上面每条链都由同一个**列表驱动**的实现（``_call_with_fallback``）承载：
+  此前三个入口各写一套 try/except，同一个故障在不同入口下的调用次数与
+  跳级行为并不一致（只有 JSON 入口实现了跳级判断）
 
 Langfuse 集成：三个 chat 入口函数均挂载 ``@observe_llm`` 装饰器，
 启用追踪时每次调用的参数 / 返回值 / 耗时 / 降级事件自动上报，
@@ -24,6 +27,8 @@ Langfuse 集成：三个 chat 入口函数均挂载 ``@observe_llm`` 装饰器�
 """
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from openai import APIConnectionError, AuthenticationError, OpenAI
 
@@ -149,26 +154,115 @@ def _get_fallback_llm_client() -> OpenAI:
     return _fallback_llm_client
 
 
-def _try_local_fallback(messages: list[dict], temperature: float) -> str:
-    """最后一跳：交给本地兜底模型（未启用或未配置模型时抛 LLMUnavailableError）。
+@dataclass(frozen=True)
+class _Hop:
+    """降级链上的一个候选端点（客户端惰性构造，只在真正调用时才创建）。
 
-    本地兜底是"云端全挂"时唯一的出路，因此这里**不再向下降级**——
-    失败即抛可判定的异常，由调用方走各自的确定性兜底逻辑。
-
-    本地小模型无思考模式（也不支持该参数），故不传 extra_body：
-    给不认识的端点硬塞厂商扩展参数只会换来一个 400。
+    :param name: 候选名，用于错误信息与"应答来源"判定
+    :param client_factory: 客户端工厂（进程内复用同一实例的连接池）
+    :param model: 该端点使用的型号
+    :param extra_body: 厂商扩展参数（思考模式开关；本地小模型不传）
+    :param json_mode: 是否用原生 ``response_format=json_object``
+    :param require_enabled: 本地兜底专用——未启用（开关关闭或型号为空）时跳过本跳
     """
-    if not settings.FALLBACK_LLM_ENABLED or not settings.FALLBACK_LLM_MODEL:
-        raise LLMUnavailableError(
-            "本地兜底模型未启用（FALLBACK_LLM_ENABLED=false 或 FALLBACK_LLM_MODEL 为空）"
-        )
-    print(f"[llm_clients] 尝试本地兜底模型: {settings.FALLBACK_LLM_MODEL}")
-    return _call_llm(
-        _get_fallback_llm_client(),
-        settings.FALLBACK_LLM_MODEL,
-        messages,
-        temperature,
+
+    name: str
+    client_factory: Callable[[], OpenAI]
+    model: str
+    extra_body: dict
+    json_mode: bool = False
+    require_enabled: bool = False
+
+
+#: 本地兜底的候选名：JSON 入口靠它回报"应答来源=本地"，
+#: 调用方（情绪语义判别层）据此收紧策略——本地小模型只允许升级、不允许降级
+_LOCAL_HOP_NAME = "本地兜底"
+
+
+def _local_hop(json_mode: bool = False) -> _Hop:
+    """本地兜底候选（未启用时由链条跳过）。
+
+    本地兜底是"云端全挂"时唯一的出路，因此链条到它就结束——失败即抛可判定异常，
+    由调用方走各自的确定性兜底逻辑。本地小模型无思考模式（也不支持该参数），
+    故 ``extra_body`` 为空：给不认识的端点硬塞厂商扩展参数只会换来一个 400。
+    """
+    return _Hop(
+        name=_LOCAL_HOP_NAME,
+        client_factory=_get_fallback_llm_client,
+        model=settings.FALLBACK_LLM_MODEL,
+        extra_body={},
+        json_mode=json_mode,
+        require_enabled=True,
     )
+
+
+def _call_with_fallback(
+    messages: list[dict], temperature: float, hops: list[_Hop]
+) -> tuple[str, str]:
+    """按候选列表逐级下探，返回 ``(内容, 命中的候选名)``。
+
+    **降级链的唯一实现**。三个 chat 入口此前各写一套、行为已经漂移：只有 JSON
+    入口实现了"端点不可达 / 鉴权失败时跳过一次注定失败的重试"，另外两个入口
+    则无脑全捕 `Exception`——同一个故障在不同入口下的调用次数不一致。
+
+    跳级判断统一在此：可达性错误直接进下一跳（重试同一端点只会再白等一个
+    完整超时周期）；其余错误在 JSON 模式下值得换普通调用再试一次
+    （典型是端点不支持 ``response_format``，而 Prompt 本身已要求 JSON 输出）。
+
+    :raises LLMUnavailableError: 全部候选均失败。转成可判定信号而非放原生异常
+        穿透，否则节点里"失败即降级"的意图会落空、整轮请求被打挂
+    """
+    errors: list[str] = []
+    for hop in hops:
+        if hop.require_enabled and not (
+            settings.FALLBACK_LLM_ENABLED and settings.FALLBACK_LLM_MODEL
+        ):
+            errors.append(
+                f"{hop.name}: 未启用"
+                "（FALLBACK_LLM_ENABLED=false 或 FALLBACK_LLM_MODEL 为空）"
+            )
+            continue
+        if hop.require_enabled:
+            print(f"[llm_clients] 尝试本地兜底模型: {hop.model}")
+
+        try:
+            return (
+                _call_llm(
+                    hop.client_factory(),
+                    hop.model,
+                    messages,
+                    temperature,
+                    json_mode=hop.json_mode,
+                    extra_body=hop.extra_body,
+                ),
+                hop.name,
+            )
+        except (APIConnectionError, AuthenticationError) as reach_error:
+            # 端点不可达 / 鉴权失败：重试同一端点只会再白等一个完整超时周期
+            errors.append(f"{hop.name}: {reach_error}")
+            print(f"[llm_clients] {hop.name} 不可达或鉴权失败，跳过重试: {reach_error}")
+        except Exception as call_error:
+            if not hop.json_mode:
+                errors.append(f"{hop.name}: {call_error}")
+                print(f"[llm_clients] {hop.name} 调用失败: {call_error}")
+                continue
+            # JSON 模式失败但端点可达：换普通调用再试一次
+            try:
+                return (
+                    _call_llm(
+                        hop.client_factory(),
+                        hop.model,
+                        messages,
+                        temperature,
+                        extra_body=hop.extra_body,
+                    ),
+                    hop.name,
+                )
+            except Exception as plain_error:
+                errors.append(f"{hop.name}: {plain_error}")
+                print(f"[llm_clients] {hop.name} 普通调用亦失败: {plain_error}")
+
+    raise LLMUnavailableError("；".join(errors))
 
 
 @observe_llm
@@ -185,30 +279,25 @@ def chat_deepseek(
     :param temperature: 问答场景用 0.3（准确性优先）；关怀回复可用 0.7（表达更自然）
     """
     messages = _build_messages(prompt, system)
-    try:
-        return _call_llm(
-            _get_deepseek_client(),
-            settings.DEEPSEEK_MODEL,
-            messages,
-            temperature,
-            extra_body=_deepseek_extra_body(),
-        )
-    except Exception as deepseek_error:
-        # 降级链第一环：核心模型不可用时由轻量端点承接，保证服务不中断
-        print(f"[llm_clients] DeepSeek 调用失败，降级到轻量端点: {deepseek_error}")
-        try:
-            return _call_llm(
-                _get_light_llm_client(),
+    return _call_with_fallback(
+        messages,
+        temperature,
+        [
+            _Hop(
+                "DeepSeek",
+                _get_deepseek_client,
+                settings.DEEPSEEK_MODEL,
+                _deepseek_extra_body(),
+            ),
+            # 降级链第一环：核心模型不可用时由轻量端点承接，保证服务不中断
+            _Hop(
+                "轻量端点",
+                _get_light_llm_client,
                 settings.LIGHT_LLM_MODEL,
-                messages,
-                temperature,
-                extra_body=_light_extra_body(),
-            )
-        except Exception as light_error:
-            # 降级链终点：两条路都不通，抛出可判定的信号而非原生异常
-            raise LLMUnavailableError(
-                f"DeepSeek 与轻量端点均调用失败：{deepseek_error}；{light_error}"
-            ) from light_error
+                _light_extra_body(),
+            ),
+        ],
+    )[0]
 
 
 @observe_llm
@@ -220,35 +309,27 @@ def chat_qwen(prompt: str, system: str | None = None, temperature: float = 0.1) 
     :param temperature: 分类 / 评估类任务统一用低温度（0.1）保证确定性
     """
     messages = _build_messages(prompt, system)
-    try:
-        return _call_llm(
-            _get_light_llm_client(),
-            settings.LIGHT_LLM_MODEL,
-            messages,
-            temperature,
-            extra_body=_light_extra_body(),
-        )
-    except Exception as light_error:
-        # 降级链第二环：轻量端点不可用时由 DeepSeek 承接轻量任务
-        print(f"[llm_clients] 轻量端点调用失败，降级到 DeepSeek: {light_error}")
-        try:
-            return _call_llm(
-                _get_deepseek_client(),
+    return _call_with_fallback(
+        messages,
+        temperature,
+        [
+            _Hop(
+                "轻量端点",
+                _get_light_llm_client,
+                settings.LIGHT_LLM_MODEL,
+                _light_extra_body(),
+            ),
+            # 降级链第二环：轻量端点不可用时由 DeepSeek 承接轻量任务
+            _Hop(
+                "DeepSeek",
+                _get_deepseek_client,
                 settings.DEEPSEEK_MODEL,
-                messages,
-                temperature,
-                extra_body=_deepseek_extra_body(),
-            )
-        except Exception as deepseek_error:
-            # 降级链第三环：云端全挂 → 交给本地兜底模型（离线可用性的底线）
-            print(f"[llm_clients] DeepSeek 也不可用，转向本地兜底: {deepseek_error}")
-            try:
-                return _try_local_fallback(messages, temperature)
-            except Exception as fallback_error:
-                raise LLMUnavailableError(
-                    f"轻量端点、DeepSeek 与本地兜底均失败："
-                    f"{light_error}；{deepseek_error}；{fallback_error}"
-                ) from fallback_error
+                _deepseek_extra_body(),
+            ),
+            # 降级链第三环：云端全挂 → 本地兜底模型（离线可用性的底线）
+            _local_hop(),
+        ],
+    )[0]
 
 
 @observe_llm
@@ -283,77 +364,34 @@ def chat_qwen_json_with_source(
 
 
 def _call_json_chain(messages: list[dict]) -> tuple[str, str]:
-    """JSON 模式的降级链（**唯一实现**），返回 ``(内容, 来源)``。
+    """JSON 模式的降级链，返回 ``(内容, 来源)``。
 
     来源：``"云端"`` = 轻量端点或 DeepSeek 应答；``"本地"`` = 本地兜底模型应答。
-
-    把 JSON 入口的降级链收敛到这一处，是因为三个 LLM 入口此前各写一套、行为已经漂移。
-    本函数承载全部跳级逻辑：
-    端点不可达 / 鉴权失败时**跳过一次注定失败的重试**（否则要白等两个超时周期），
-    其余错误才值得换普通调用再试一次。
+    跳级与重试策略统一由 :func:`_call_with_fallback` 承载，本函数只负责
+    按 JSON 任务的形状给出候选列表并把候选名翻译成"云端 / 本地"。
     """
-    light_error: Exception
-
-    # 第一级：原生 JSON 模式
-    try:
-        return (
-            _call_llm(
-                _get_light_llm_client(),
+    content, hop_name = _call_with_fallback(
+        messages,
+        0.1,
+        [
+            _Hop(
+                "轻量端点",
+                _get_light_llm_client,
                 settings.LIGHT_LLM_MODEL,
-                messages,
-                temperature=0.1,
+                _light_extra_body(),
                 json_mode=True,
-                extra_body=_light_extra_body(),
             ),
-            "云端",
-        )
-    except (APIConnectionError, AuthenticationError) as reach_error:
-        # 端点不可达 / 鉴权失败：**重试同一端点只会再白等一个完整超时周期**，
-        # 因此跳过第二级直接降级。此前这里对不可达端点重试一次，
-        # 端点完全挂掉时要先等满两个超时（实测 15s × 2）才走降级
-        light_error = reach_error
-    except Exception:
-        # 其余失败（典型是端点不支持 response_format）才值得换普通调用再试一次
-        try:
-            return (
-                _call_llm(
-                    _get_light_llm_client(),
-                    settings.LIGHT_LLM_MODEL,
-                    messages,
-                    temperature=0.1,
-                    extra_body=_light_extra_body(),
-                ),
-                "云端",
-            )
-        except Exception as plain_error:
-            light_error = plain_error
-
-    # 第三级：轻量端点整体不可用，DeepSeek JSON 模式兜底
-    print(f"[llm_clients] 轻量端点不可用，JSON 任务降级到 DeepSeek: {light_error}")
-    try:
-        return (
-            _call_llm(
-                _get_deepseek_client(),
+            _Hop(
+                "DeepSeek",
+                _get_deepseek_client,
                 settings.DEEPSEEK_MODEL,
-                messages,
-                temperature=0.1,
+                _deepseek_extra_body(),
                 json_mode=True,
-                extra_body=_deepseek_extra_body(),
             ),
-            "云端",
-        )
-    except Exception as deepseek_error:
-        # 第四级：云端全挂 → 本地兜底模型（JSON 模式）
-        print(
-            f"[llm_clients] DeepSeek 也不可用，JSON 任务转向本地兜底: {deepseek_error}"
-        )
-        try:
-            return _try_local_fallback(messages, 0.1), "本地"
-        except Exception as fallback_error:
-            # 降级链终点：转成可判定的异常，避免 openai 原生异常穿透节点
-            raise LLMUnavailableError(
-                f"JSON 任务三跳均失败：{light_error}；{deepseek_error}；{fallback_error}"
-            ) from fallback_error
+            _local_hop(json_mode=True),
+        ],
+    )
+    return content, "本地" if hop_name == _LOCAL_HOP_NAME else "云端"
 
 
 def parse_json_response(raw: str) -> dict:

@@ -2,8 +2,7 @@
 
 import pytest
 
-from config.settings import get_current_semester, settings
-
+from config.settings import settings
 
 # ==================== 降级链终点兜底 ====================
 
@@ -219,7 +218,12 @@ def test_qwen_json_skips_retry_when_endpoint_unreachable(
 def test_qwen_json_still_retries_on_other_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """非可达性错误（如端点不支持 response_format）仍应保留第二级重试。"""
+    """非可达性错误（如端点不支持 response_format）仍应保留第二级重试。
+
+    重试策略对**每个 JSON 候选一视同仁**：此前只有轻量端点享有"换普通调用
+    再试一次"，DeepSeek 一跳直接失败——同一个故障在不同端点上的重试行为不同。
+    统一为列表驱动的降级链后，两个云端候选各重试一次。
+    """
     import importlib
 
     llm = importlib.import_module("agent.llm_clients")
@@ -238,10 +242,11 @@ def test_qwen_json_still_retries_on_other_errors(
     with pytest.raises(llm.LLMUnavailableError):
         llm.chat_qwen_json("测试")
 
-    # 轻量端点两级 + DeepSeek 一级 = 三次
+    # 轻量端点两级（JSON + 普通）+ DeepSeek 两级（JSON + 普通）= 四次
     assert models_called == [
         settings.LIGHT_LLM_MODEL,
         settings.LIGHT_LLM_MODEL,
+        settings.DEEPSEEK_MODEL,
         settings.DEEPSEEK_MODEL,
     ]
 

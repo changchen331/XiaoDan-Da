@@ -6,7 +6,7 @@
 - 全部字段 total=False：构造初始 State 时允许只传部分键（LangGraph 增量合并）
 """
 
-from typing import Literal, Optional, TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel
 
@@ -58,10 +58,10 @@ class AgentState(TypedDict, total=False):
     user_profile: dict  # 用户画像（本科生/研究生/留学生/教职工）
 
     # ===== 情绪检测结果 =====
-    emotion: Optional[EmotionResult]
+    emotion: EmotionResult | None
 
     # ===== 意图路由结果 =====
-    intent: Optional[IntentResult]
+    intent: IntentResult | None
 
     # ===== 语言偏好 =====
     # 用户期望的回复语言（"中文" / "English"）：由意图路由结合当前输入语言与
@@ -78,7 +78,7 @@ class AgentState(TypedDict, total=False):
     generated_response: str  # 基于上下文生成的回答
 
     # ===== 质量评估结果 =====
-    quality: Optional[QualityResult]
+    quality: QualityResult | None
     retry_count: int  # 质量不合格时的重试计数
 
     # ===== 记忆相关 =====

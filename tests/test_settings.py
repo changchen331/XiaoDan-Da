@@ -3,8 +3,7 @@
 from datetime import date
 
 from agent.llm_clients import parse_json_response
-from config.settings import get_current_semester, settings
-
+from config.settings import get_current_semester
 
 # ==================== 工具函数 ====================
 

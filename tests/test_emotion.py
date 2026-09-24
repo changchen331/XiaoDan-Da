@@ -4,11 +4,10 @@ from typing import get_args
 
 import pytest
 
-from agent.state import EmotionResult, IntentResult
-from config.settings import get_current_semester, settings
+from agent.state import EmotionResult
+from config.settings import settings
 from emotion.detector import detect_emotion
 from emotion.rule_engine import LEVEL_HIGH, LEVEL_MID, LEVEL_NORMAL, RuleEngine
-
 
 # ==================== 规则引擎 ====================
 
@@ -154,8 +153,7 @@ def _stub_semantic(monkeypatch: pytest.MonkeyPatch, replies: list) -> list:
 def test_semantic_upgrades_hidden_high_risk(monkeypatch: pytest.MonkeyPatch) -> None:
     """规则漏报的隐晦高危：语义层判「高危 + 指向本人」→ 升级为高危。
 
-    这是 v2 阶段一 #9 的核心目标——评测集 18 条隐晦高危在规则层命中 0 条，
-    全靠这一层补上召回。
+    这一层的目标：评测集 18 条隐晦高危在规则层命中 0 条，全靠它补上召回。
     """
     _stub_semantic(monkeypatch, [('{"level": "高危", "referent": "本人"}', "云端")])
 
@@ -234,3 +232,75 @@ def test_semantic_disabled_skips_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     result = detect_emotion("昨晚把录取通知书剪成小块冲进马桶了")
     assert result["level"] == "正常"
     assert calls == []
+
+
+# ==================== 只抽指向（上报环节补标注用）====================
+
+
+def test_judge_referent_extracts_referent_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """只抽指向、不判级别：一次调用即可，供规则高危路径补标注。"""
+    from emotion.semantic import judge_referent
+
+    calls = _stub_semantic(monkeypatch, [('{"referent": "他人"}', "云端")])
+    assert judge_referent("我室友说他活不下去了") == "他人"
+    assert len(calls) == 1
+
+
+def test_judge_referent_rejects_illegal_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非法取值抛 ValueError（由调用方维持"未标注"），不得写进记录。"""
+    from emotion.semantic import judge_referent
+
+    _stub_semantic(monkeypatch, [('{"referent": "室友"}', "云端")])
+    with pytest.raises(ValueError):
+        judge_referent("我室友说他活不下去了")
+
+
+# ==================== 分类器单例初始化 ====================
+
+
+def test_classifier_initialized_once_under_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并发首请求只应构造一个分类器实例。
+
+    初始化不是原子操作（导入 transformers + 加载权重耗时数秒）：无锁时多个线程
+    会同时进入构造，实测其中一个拿到**半初始化的 transformers** 并抛 ImportError；
+    而异常分支把 _classifier_unavailable 置真，等于**整个进程此后永久降级为
+    纯规则引擎**。串行调用不复现，故必须用并发用例钉住。
+    """
+    import importlib
+    import threading
+    import time
+
+    detector = importlib.import_module("emotion.detector")
+    classifier_module = importlib.import_module("emotion.classifier")
+    created: list = []
+
+    class _SlowClassifier:
+        """构造耗时 50ms 的替身：放大竞态窗口，无锁时四个线程会各建一个。"""
+
+        def __init__(self) -> None:
+            time.sleep(0.05)
+            created.append(self)
+
+        def predict(self, text: str) -> dict:
+            return {"正常": 0.9, "轻度困扰": 0.03, "中度困扰": 0.04, "高危": 0.03}
+
+    monkeypatch.setattr(classifier_module, "EmotionClassifier", _SlowClassifier)
+    monkeypatch.setattr(detector, "_classifier", None)
+    monkeypatch.setattr(detector, "_classifier_unavailable", False)
+
+    threads = [
+        threading.Thread(target=detector._predict_with_model, args=("测试",))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(created) == 1

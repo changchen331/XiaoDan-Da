@@ -48,9 +48,21 @@ ALERT_TABLE_DDL = """
                       trigger_summary
                       TEXT, -- 触发内容摘要（前 100 字）
                       recent_context
-                      JSONB -- 最近 3 轮对话上下文
+                      JSONB, -- 最近 3 轮对话上下文
+                      referent
+                      TEXT -- 危险表达的指向（本人/他人/引用/否定/无）：
+                           -- 区分"本人危机"与"代他人求助"，避免把
+                           -- "我室友说活不下去"记成提问者本人的高危事件
                   ) \
                   """
+
+# 增量列迁移：CREATE TABLE IF NOT EXISTS 不会给**已存在**的表补列，
+# 而升级部署时表是旧的（新列会缺失，INSERT 直接报错）。
+# ADD COLUMN IF NOT EXISTS 幂等，每次写库顺手执行即可。
+ALERT_REFERENT_MIGRATION = """
+                            ALTER TABLE emotion_alerts
+                                ADD COLUMN IF NOT EXISTS referent TEXT \
+                            """
 
 
 def build_report_record(
@@ -59,6 +71,7 @@ def build_report_record(
     emotion_level: str,
     emotion_confidence: float,
     recent_context: list,
+    referent: str | None = None,
 ) -> dict:
     """生成脱敏后的上报记录。
 
@@ -67,6 +80,8 @@ def build_report_record(
     :param emotion_level: 情绪级别（"高危"）
     :param emotion_confidence: 检测置信度
     :param recent_context: 最近对话历史（仅截取最近 3 轮）
+    :param referent: 危险表达的指向；规则命中的高危路径上由上报环节在
+        **后台**补齐（见 agent/nodes/report.py），故允许为空
     :return: 可直接入库 / 发邮件的记录字典
     """
     return {
@@ -76,16 +91,20 @@ def build_report_record(
         "confidence": emotion_confidence,
         "trigger_text_summary": trigger_text[:100],  # 摘要截断：数据最小化
         "recent_context": recent_context[-3:],
+        "referent": referent,
     }
 
 
-def submit_report(record: dict) -> None:
+def submit_report(record: dict) -> int | None:
     """上报执行：写库（立即）+ 邮件通知（已配置时）。
 
     写库与邮件互不阻断：邮件失败只影响通知时效，不影响记录留痕。
+
+    :return: 入库记录 id；写库失败时为 None（此时不再补指向标注）
     """
+    alert_id: int | None = None
     try:
-        _insert_alert(record)
+        alert_id = _insert_alert(record)
     except psycopg.Error as db_error:
         # 上报落库失败不抛出：不能因数据库故障中断对用户的关怀回复
         print(f"[reporting] 上报写库失败（需人工核对补录）: {db_error}")
@@ -96,18 +115,42 @@ def submit_report(record: dict) -> None:
         except (smtplib.SMTPException, OSError) as mail_error:
             print(f"[reporting] 告警邮件发送失败: {mail_error}")
 
+    return alert_id
 
-def _insert_alert(record: dict) -> None:
-    """将上报记录写入独立的 emotion_alerts 表（幂等建表）。"""
+
+def annotate_alert_referent(alert_id: int, referent: str) -> None:
+    """给已入库的上报记录补"危险表达指向"标注（失败只打日志）。
+
+    单独成一个写操作，是为了让调用方（上报节点）能把它放到后台：
+    记录已经落库、邮件已经发出，用户不该为一次标注再等一个超时周期。
+    """
+    try:
+        with connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE emotion_alerts SET referent = %s WHERE id = %s",
+                    (referent, alert_id),
+                )
+    except psycopg.Error as db_error:
+        print(f"[reporting] 指向标注写库失败（记录维持未标注）: {db_error}")
+
+
+def _insert_alert(record: dict) -> int:
+    """将上报记录写入独立的 emotion_alerts 表（幂等建表 + 幂等补列）。
+
+    :return: 新记录 id
+    """
     with connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(ALERT_TABLE_DDL)
+            cursor.execute(ALERT_REFERENT_MIGRATION)
             cursor.execute(
                 """
                 INSERT INTO emotion_alerts
                 (user_id, detected_at, emotion_level, confidence,
-                 trigger_summary, recent_context)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                 trigger_summary, recent_context, referent)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
                     record["user_id"],
@@ -116,12 +159,16 @@ def _insert_alert(record: dict) -> None:
                     record["confidence"],
                     record["trigger_text_summary"],
                     json.dumps(record["recent_context"], ensure_ascii=False),
+                    record.get("referent"),
                 ),
             )
+            row = cursor.fetchone()
+    alert_id = int(row[0]) if row else 0
     print(
         f"[reporting] 高危记录已入库: 用户 {record['user_id']} "
         f"置信度 {record['confidence']:.2f}"
     )
+    return alert_id
 
 
 def _send_alert_email(record: dict) -> None:

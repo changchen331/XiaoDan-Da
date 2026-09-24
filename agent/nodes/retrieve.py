@@ -14,11 +14,11 @@
 
 质检重试（retry_count > 0）会**改变检索输入**：候选池随重试次数翻倍、
 重排片段逐次 +2、并去掉人群过滤（保留学期时效过滤）——否则重试拿到
-与首次完全相同的确定性结果，生成不可能有信息增益（v2-plan 2.1 #4）。
+与首次完全相同的确定性结果，生成不可能有信息增益。
 """
 from agent.faq_verify import verify_faq_match
 from agent.state import AgentState
-from config.settings import settings, get_current_semester
+from config.settings import get_current_semester, settings
 
 
 def build_filter_expr(user_profile: dict, include_audience: bool = True) -> str:

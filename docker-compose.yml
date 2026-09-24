@@ -63,16 +63,19 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: xiaodan
+      # 三项均由 .env 决定，并与 api 服务读取同一组变量：
+      # 此前 USER/DB 在此写死为 xiaodan，而 api 侧读 POSTGRES_USER/DB，
+      # 于是改 .env 会让"容器内跑"与"宿主机直跑"连到**不同的库**（静默不一致）
+      POSTGRES_USER: ${POSTGRES_USER:-xiaodan}
       # 密码与 api 服务读取同一变量，宿主机 / 容器永不漂移
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: xiaodan
+      POSTGRES_DB: ${POSTGRES_DB:-xiaodan}
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U xiaodan" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xiaodan}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -90,6 +93,9 @@ services:
       MILVUS_COLLECTION: ${MILVUS_COLLECTION:-xiaodan_kb}
       MILVUS_FAQ_COLLECTION: ${MILVUS_FAQ_COLLECTION:-xiaodan_faq}
       POSTGRES_HOST: postgres
+      # USER / DB 同样透传：与 postgres 服务、宿主机直跑三方共用一组变量
+      POSTGRES_USER: ${POSTGRES_USER:-xiaodan}
+      POSTGRES_DB: ${POSTGRES_DB:-xiaodan}
       # 密码与 postgres 服务读取同一变量，双侧对齐
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       # ===== LLM 端点（从 .env 透传，未配置时回落代码默认值）=====
@@ -108,11 +114,15 @@ services:
       FALLBACK_LLM_BASE_URL: ${FALLBACK_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       FALLBACK_LLM_API_KEY: ${FALLBACK_LLM_API_KEY:-ollama}
       FALLBACK_LLM_MODEL: ${FALLBACK_LLM_MODEL:-}
-      FALLBACK_LLM_TIMEOUT: ${FALLBACK_LLM_TIMEOUT:-60}
+      # 180s：本地量化模型冷启动要载入权重（实测 88s），超时给宽才等得到首 token
+      FALLBACK_LLM_TIMEOUT: ${FALLBACK_LLM_TIMEOUT:-180}
       # ===== 嵌入 / 重排模型 =====
       EMBED_MODEL_NAME: ${EMBED_MODEL_NAME:-BAAI/bge-m3}
       RERANK_MODEL_NAME: ${RERANK_MODEL_NAME:-BAAI/bge-reranker-v2-m3}
-      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+      # 镜像源与 Dockerfile / .env.example 保持一致：
+      # 此前这里默认官方源，而 compose 的 environment **优先级高于 Dockerfile 的 ENV**，
+      # 于是容器内设的国内镜像被静默覆盖、加速实际失效
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       EMOTION_MODEL_PATH: ${EMOTION_MODEL_PATH:-models/emotion-xlmr}
       # ===== 检索 / 情绪 / 流程可调参数（默认值与 settings.py 一致）=====
       HYBRID_TOP_K: ${HYBRID_TOP_K:-20}

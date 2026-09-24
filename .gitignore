@@ -44,6 +44,10 @@ rag_eval_report.csv
 # 会被当成字面模式匹配，规则实际不生效（v2 实测发现，原写法确实没生效）
 outputs/
 .pytest_cache/
+# 覆盖率产物（pytest-cov：只出报告、不设门槛）
+.coverage
+.coverage.*
+htmlcov/
 # HuggingFace 模型下载缓存（Docker 挂载目录）
 hf_cache/
 .vscode/

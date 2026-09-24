@@ -86,9 +86,10 @@ class Settings:
     )  # 默认指向 Ollama 的 OpenAI 兼容端点
     FALLBACK_LLM_API_KEY: str = os.getenv("FALLBACK_LLM_API_KEY", "ollama")
     FALLBACK_LLM_MODEL: str = os.getenv("FALLBACK_LLM_MODEL", "")
-    FALLBACK_LLM_TIMEOUT: int = int(
-        os.getenv("FALLBACK_LLM_TIMEOUT", "60")
-    )  # 本地量化模型首 token 较慢，超时给宽
+    # 180 秒而非更短：本地量化模型**冷启动要先把权重读进内存**（实测 88s），
+    # 超时给窄会让第一次调用必然失败——而它恰恰是"云端全挂"时唯一的出路。
+    # 本值是同一默认值的唯一声明处，.env.example 与 docker-compose.yml 与之对齐
+    FALLBACK_LLM_TIMEOUT: int = int(os.getenv("FALLBACK_LLM_TIMEOUT", "180"))
 
     # ==================== 模块一：知识库 ====================
 
@@ -111,8 +112,10 @@ class Settings:
         os.getenv("FAQ_MATCH_THRESHOLD", "0.85")
     )  # FAQ 高置信度命中阈值
 
-    # HuggingFace 模型下载源（国内网络可切换为 https://hf-mirror.com 加速）
-    HF_ENDPOINT: str = os.getenv("HF_ENDPOINT", "https://huggingface.co")
+    # HuggingFace 模型下载源（默认国内镜像；海外网络可改回 https://huggingface.co）
+    # 注：真正生效靠 load_dotenv() 把 .env 写进进程环境变量——huggingface_hub
+    # 在**导入时**读取该变量并固化，故导入顺序见 knowledge_base/indexing/embeddings.py
+    HF_ENDPOINT: str = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
 
     # ==================== 模块二：情绪检测 ====================
 
