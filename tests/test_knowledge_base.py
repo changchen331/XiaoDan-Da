@@ -78,6 +78,181 @@ def test_delete_chunks_by_source_uses_metadata_filter(
     assert captured["filter"] == 'metadata["source_file"] == "手册/选课手册.pdf"'
 
 
+# ==================== Milvus 客户端复用 ====================
+
+
+def test_milvus_client_is_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """客户端必须是进程级单例：建库流程会调用 6 次，每次新建等于反复重建连接。
+
+    此前 `get_milvus_client()` 是工厂（每次 `MilvusClient(uri=...)`），
+    而 docstring 写"可重复创建"——注释读起来像"已复用"，实现却是每次新实例。
+    """
+    from knowledge_base.indexing import milvus_client
+
+    built: list = []
+
+    class _FakeClient:
+        def __init__(self, uri: str) -> None:
+            built.append(uri)
+
+    monkeypatch.setattr(milvus_client, "MilvusClient", _FakeClient)
+    monkeypatch.setattr(milvus_client, "_client", None)
+
+    first = milvus_client.get_milvus_client()
+    second = milvus_client.get_milvus_client()
+
+    assert first is second
+    assert len(built) == 1  # 只构造一次
+
+
+# ==================== 建库流水线 ====================
+
+
+class _FakeEmbedder:
+    """替身编码器：只回固定长度的假向量，不加载 BGE-M3。"""
+
+    def encode(self, texts: list) -> list:
+        return [{"dense": [0.0], "sparse": {}} for _ in texts]
+
+
+def _import_build_module(monkeypatch: pytest.MonkeyPatch):
+    """导入建库流水线模块。
+
+    先注入假 embeddings：knowledge_base.faq 顶层会导入 embeddings
+    （连带 FlagEmbedding，实测约 11s），单测不该为它付加载代价。
+    """
+    import importlib
+    import sys
+    import types
+
+    fake_embeddings = types.ModuleType("knowledge_base.indexing.embeddings")
+    fake_embeddings.get_embedder = lambda: _FakeEmbedder()
+    monkeypatch.setitem(
+        sys.modules, "knowledge_base.indexing.embeddings", fake_embeddings
+    )
+    return importlib.import_module("knowledge_base.indexing.build_index")
+
+
+def test_build_index_pipeline_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """流水线的步骤顺序即契约：建集合 → FAQ → 按来源幂等替换 → 分组入库。
+
+    这条流水线此前只存在于 scripts/build_index.py，既无单测覆盖、也无法被
+    第二个入口复用；下沉到模块层后用它钉住顺序与统计口径。
+    """
+    build_module = _import_build_module(monkeypatch)
+    calls: list = []
+
+    class _FakeFaqIndex:
+        def build(self, entries: list) -> int:
+            calls.append(("faq", len(entries)))
+            return 5
+
+    def _fake_delete(source: str) -> int:
+        calls.append(("delete", source))
+        return 2
+
+    def _fake_chunk(text: str, doc_type: str, metadata: dict) -> list:
+        return [{"text": f"{text}#1"}, {"text": f"{text}#2"}]
+
+    records = [
+        {
+            "text": "甲正文",
+            "doc_type": "通知",
+            "topic_tag": "通知",
+            "metadata": {"source_file": "通知/a.txt"},
+        },
+        {
+            "text": "乙正文",
+            "doc_type": "手册",
+            "topic_tag": "手册",
+            "metadata": {"source_file": "手册/b.pdf"},
+        },
+    ]
+    failed = [("bad.pdf", "解析失败")]
+
+    monkeypatch.setattr(
+        build_module, "create_kb_collection", lambda: calls.append("create_kb")
+    )
+    monkeypatch.setattr(
+        build_module, "create_faq_collection", lambda: calls.append("create_faq")
+    )
+    monkeypatch.setattr(
+        build_module, "reset_collections", lambda: calls.append("reset")
+    )
+    monkeypatch.setattr(build_module, "get_faq_index", lambda: _FakeFaqIndex())
+    monkeypatch.setattr(build_module, "delete_chunks_by_source", _fake_delete)
+    monkeypatch.setattr(build_module, "chunk_by_type", _fake_chunk)
+    monkeypatch.setattr(build_module, "get_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(
+        build_module, "iter_document_records", lambda data_dir: (records, failed)
+    )
+    monkeypatch.setattr(
+        build_module,
+        "insert_chunks",
+        lambda chunks, vectors: calls.append(("insert", len(chunks))),
+    )
+
+    (tmp_path / "faq.json").write_text(
+        '[{"question": "q", "answer": "a"}]', encoding="utf-8"
+    )
+
+    stats = build_module.build_index(str(tmp_path))
+
+    # 统计口径（供第二入口消费）
+    assert stats["chunk_count"] == 4  # 两组 × 每篇 2 个 chunk
+    assert stats["faq_rows"] == 5
+    assert stats["failed_files"] == failed
+    # 顺序：集合就绪 → FAQ → 按来源替换 → 分组入库
+    assert calls == [
+        "create_kb",
+        "create_faq",
+        ("faq", 1),
+        ("delete", "通知/a.txt"),
+        ("delete", "手册/b.pdf"),
+        ("insert", 2),
+        ("insert", 2),
+    ]
+
+
+def test_build_index_rebuild_skips_per_source_delete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """整库重建：先清空集合，不再逐篇按来源删（避免对空集合发无谓请求）。"""
+    build_module = _import_build_module(monkeypatch)
+    calls: list = []
+
+    monkeypatch.setattr(
+        build_module, "create_kb_collection", lambda: calls.append("create_kb")
+    )
+    monkeypatch.setattr(
+        build_module, "create_faq_collection", lambda: calls.append("create_faq")
+    )
+    monkeypatch.setattr(
+        build_module, "reset_collections", lambda: calls.append("reset")
+    )
+    monkeypatch.setattr(
+        build_module, "delete_chunks_by_source", lambda source: calls.append("delete")
+    )
+    monkeypatch.setattr(
+        build_module, "chunk_by_type", lambda text, doc_type, metadata: []
+    )
+    monkeypatch.setattr(build_module, "get_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(
+        build_module, "iter_document_records", lambda data_dir: ([], [])
+    )
+
+    stats = build_module.build_index(str(tmp_path), rebuild=True)
+
+    assert stats["chunk_count"] == 0
+    assert stats["faq_rows"] == 0  # 无 faq.json
+    assert calls == ["reset", "create_kb", "create_faq"]  # 无 delete
+
+
+# ==================== FAQ 重建 ====================
+
+
 def test_faq_build_clears_before_insert(monkeypatch: pytest.MonkeyPatch) -> None:
     """FAQ 重建：先清空既有行再写入，重跑不累积重复问答。
 

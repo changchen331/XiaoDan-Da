@@ -16,9 +16,9 @@
 
 from langgraph.graph import END
 
-from agent.llm_clients import chat_qwen
 from agent.state import AgentState
 from config.settings import settings
+from infra.llm_clients import chat_qwen
 
 # 轻度困扰：一句自然关怀（LLM 生成，避免固定模板的重复感）
 MILD_SUFFIX_PROMPT = """请为下面的校园问答回复追加一句简短的关怀后缀。

@@ -31,9 +31,9 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
 from config.settings import settings
 from emotion.rule_engine import LEVEL_HIGH, RuleEngine
+from infra.llm_clients import JSON_TASK_ERRORS, chat_qwen_json_parsed
 
 # ===== 四级标签的判定规则（喂给 LLM，同时也是语料标注的一致性基准）=====
 LABEL_DEFINITIONS: dict = {
@@ -58,6 +58,13 @@ LABEL_DEFINITIONS: dict = {
         "这是最容易被漏报的一类表达。"
     ),
 }
+
+# 标签键必须与运行时唯一声明处（settings.EMOTION_LABELS）完全一致：
+# 这里的四份定义会被拼进 prompt、也是语料标注的一致性基准，
+# 与 settings 漂移会产出"标签体系对不上"的语料（改一处忘另一处的经典现场）
+assert set(LABEL_DEFINITIONS) == set(
+    settings.EMOTION_LABELS
+), "LABEL_DEFINITIONS 的标签键必须与 settings.EMOTION_LABELS 完全一致"
 
 # 校园场景池：覆盖学业 / 人际 / 家庭 / 经济 / 身心 / 发展六类压力源
 SCENARIOS: tuple = (
@@ -163,11 +170,11 @@ def _generate_batch(label: str, index: int, count: int, scenario_offset: int) ->
     prompt = _build_prompt(label, scenarios, styles, count)
     for attempt in range(2):
         try:
-            payload = parse_json_response(chat_qwen_json(prompt))
+            payload = chat_qwen_json_parsed(prompt)
             samples = payload.get("samples", [])
             if isinstance(samples, list) and samples:
                 return [str(item).strip() for item in samples if str(item).strip()]
-        except (LLMUnavailableError, ValueError, KeyError) as error:
+        except JSON_TASK_ERRORS as error:
             print(f"[synthesize] {label} 第 {index} 批失败（第 {attempt + 1} 次）：{error}")
             time.sleep(2)
     return []

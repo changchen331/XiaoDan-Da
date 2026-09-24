@@ -11,8 +11,8 @@
 + 原始 query 直接检索 + 中文回复，保证主流程永不中断。
 """
 
-from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
-from agent.state import AgentState, IntentResult
+from agent.state import INTENT_CATEGORIES, AgentState, IntentResult
+from infra.llm_clients import JSON_TASK_ERRORS, chat_qwen_json_parsed
 
 # 意图分类 + Query 改写 + 语言判定的一体化指令
 INTENT_PROMPT = """你是一个校园问答系统的意图分类器。请分析用户的问题，完成三个任务：
@@ -44,8 +44,10 @@ INTENT_PROMPT = """你是一个校园问答系统的意图分类器。请分析�
 {{"category": "简单问答", "rewritten_query": "改写后的检索query", "input_language": "中文", "requested_language": ""}}
 """
 
-# 合法意图类别白名单（模型输出不在其中时按简单问答兜底）
-VALID_CATEGORIES: tuple = ("简单问答", "复杂查询", "FAQ", "闲聊越界")
+# 合法意图类别白名单（模型输出不在其中时按简单问答兜底）。
+# 取值从 IntentResult 的类型白名单派生——意图四类此前在 4 处各写一份字面量，
+# 副本改动不同步就是 T25「整图崩溃」那类缺陷的温床
+VALID_CATEGORIES: tuple = INTENT_CATEGORIES
 # 合法语言白名单（模型输出其他值时按中文兜底）
 VALID_LANGUAGES: tuple = ("中文", "English")
 
@@ -67,13 +69,12 @@ def intent_route(state: AgentState) -> dict:
     input_language = "中文"
     requested_language = ""
     try:
-        raw = chat_qwen_json(prompt)
-        result = parse_json_response(raw)
+        result = chat_qwen_json_parsed(prompt)
         category = result["category"]
         rewritten_query = result["rewritten_query"]
         input_language = result.get("input_language", "中文")
         requested_language = result.get("requested_language") or ""
-    except (ValueError, KeyError, TypeError, LLMUnavailableError) as route_error:
+    except JSON_TASK_ERRORS as route_error:
         # 路由失败兜底：按简单问答处理，用原始输入直接检索，沿用既有语言偏好。
         # 捕获范围必须包含 LLMUnavailableError（降级链耗尽）——只捕解析类异常时，
         # 两端点同时故障会穿透节点把整轮请求打挂

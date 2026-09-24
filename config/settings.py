@@ -40,7 +40,7 @@ class Settings:
     # ② 思考模式下 temperature 会被厂商改写（千问文档：传入更小值自动调整为 0.6），
     #    而本项目轻量任务全部按 0.1 求确定性，等于设计意图被悄悄推翻。
     # 默认关闭：本项目的答案事实性由检索上下文保证，需要的是稳定可复现而非自由推理；
-    # 需要开启时置 true 即可（厂商参数名不同，转换见 agent/llm_clients.py）。
+    # 需要开启时置 true 即可（厂商参数名不同，转换见 infra/llm_clients.py）。
     DEEPSEEK_THINKING: bool = (
         os.getenv("DEEPSEEK_THINKING", "false").lower() == "true"
     )

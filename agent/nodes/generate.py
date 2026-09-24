@@ -11,10 +11,10 @@
 背景参考（如用户上轮问过选课，本轮追问宿舍时可关联理解）。
 """
 
-from agent.llm_clients import chat_deepseek
 from agent.memory_store import fetch_recent_memories
 from agent.state import AgentState
 from config.settings import settings
+from infra.llm_clients import chat_deepseek
 
 # 生成端点不可用时的兜底回复（中英双套，尊重用户的语言偏好）：
 # 有输出且诚实，比整轮抛异常或返回半截检索原文都好

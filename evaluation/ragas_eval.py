@@ -44,7 +44,6 @@ import math
 import re
 
 import pandas as pd
-from openai import AsyncOpenAI
 from ragas.embeddings import HuggingFaceEmbeddings
 from ragas.llms import InstructorBaseRagasLLM, llm_factory
 from ragas.metrics.collections import (
@@ -56,6 +55,7 @@ from ragas.metrics.collections import (
 )
 
 from config.settings import settings
+from infra.llm_clients import build_judge_client
 
 # 并发上限：评测是 IO 密集型（等裁判 API 返回），并发能显著压缩总耗时；
 # 但裁判端点有速率限制，8 路是实测不触发限流的上限
@@ -98,23 +98,17 @@ def sanitize_dataset(raw_data: dict) -> dict:
 def build_judge() -> InstructorBaseRagasLLM:
     """裁判模型：百炼 qwen3-max 快照版，temperature=0。
 
-    必须显式传 base_url 与 api_key：默认会走 OpenAI 官方端点与 OPENAI_API_KEY，
-    而本项目不接 OpenAI（该变量为空）。裁判独立配置的选型理由见 settings.py。
+    客户端由基础设施层的 `build_judge_client()` 提供（缺密钥时它直接报错，
+    不走降级链——评测拿不到裁判就该立刻失败）。裁判独立配置的选型理由见 settings.py。
 
     客户端**必须是异步的**：新指标的 ascore() 走 agenerate()，
     传入同步 OpenAI 客户端会直接抛 "Cannot use agenerate() with a synchronous
     client"。异步客户端也让下面的并发打分真正并行（同步客户端只能串行等待）。
     """
-    if not settings.JUDGE_API_KEY:
-        raise RuntimeError(
-            "裁判模型缺少密钥：请设置系统环境变量 QWEN（或 .env 中的 JUDGE_API_KEY）"
-        )
     return llm_factory(
         settings.JUDGE_MODEL,
         provider="openai",
-        client=AsyncOpenAI(
-            api_key=settings.JUDGE_API_KEY, base_url=settings.JUDGE_BASE_URL
-        ),
+        client=build_judge_client(),
         temperature=0,  # 裁判必须 0：同一输入多次评测结果需一致
         # 1024 会在 answer_correctness 上触顶（该指标要逐句比对答案与标准答案，
         # 输出结构比其余四项长得多），实测抛 IncompleteOutputException 导致整格缺失

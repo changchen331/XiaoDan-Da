@@ -5,7 +5,7 @@
 
 两层追踪覆盖：
 1. LLM 调用层：``observe_llm`` 装饰器（Langfuse @observe）注入
-   ``agent/llm_clients.py`` 的各 chat 函数，记录调用参数、耗时、返回值
+   ``infra/llm_clients.py`` 的各 chat 函数，记录调用参数、耗时、返回值
 2. 图结构层：``get_langgraph_callbacks`` 返回 CallbackHandler，
    在 graph.invoke 时注入，记录 Agent 各节点的执行轨迹与状态流转
 
@@ -36,7 +36,7 @@ def get_langgraph_callbacks() -> list:
 def observe_llm(func):
     """LLM 调用追踪装饰器：Langfuse 启用时注入 @observe，否则原样返回函数。
 
-    用法（agent/llm_clients.py）：
+    用法（infra/llm_clients.py）：
         @observe_llm
         def chat_deepseek(...): ...
 

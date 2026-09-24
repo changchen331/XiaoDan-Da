@@ -25,7 +25,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-from agent.llm_clients import chat_qwen_json, parse_json_response
+from infra.llm_clients import chat_qwen_json_parsed
 
 # 公开 FAQ 来源：(URL, 主题标签)。全部为校内公开页面，无需登录。
 FAQ_SOURCES: list = [
@@ -164,9 +164,7 @@ def enrich(pairs: list, batch_size: int = 5) -> None:
             for index, item in enumerate(batch)
         )
         try:
-            result = parse_json_response(
-                chat_qwen_json(_ENRICH_PROMPT.format(items=listing))
-            )
+            result = chat_qwen_json_parsed(_ENRICH_PROMPT.format(items=listing))
             for entry in result.get("items", []):
                 position = int(entry.get("index", -1))
                 if 0 <= position < len(batch):

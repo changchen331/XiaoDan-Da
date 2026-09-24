@@ -30,7 +30,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from openai import APIConnectionError, AuthenticationError, OpenAI
+from openai import APIConnectionError, AsyncOpenAI, AuthenticationError, OpenAI
 
 from config.settings import settings
 from observability.tracing import observe_llm
@@ -47,6 +47,18 @@ class LLMUnavailableError(RuntimeError):
     调用方约定：捕获本异常并降级到**确定性兜底逻辑**
     （如意图路由退回「简单问答」、质检退回放行）。
     """
+
+
+#: JSON 结构化任务的**统一失败集**：声明只在这一处，调用方写
+#: ``except JSON_TASK_ERRORS``。四项各自对应一种真实故障：
+#:
+#: - ``LLMUnavailableError``：降级链耗尽（云端全挂且本地兜底不可用）
+#: - ``ValueError``：响应里确实不含合法 JSON 对象
+#: - ``KeyError`` / ``TypeError``：JSON 合法但字段缺失 / 类型不符
+#:
+#: 此前这个四元组被人工抄进 4 个节点，**漏抄第一项**就会让原生异常穿透节点、
+#: 把整轮请求打挂（v1 实测过的现场）。集中声明后，"漏抄"这个失败模式不再存在。
+JSON_TASK_ERRORS = (LLMUnavailableError, ValueError, KeyError, TypeError)
 
 
 def _build_messages(prompt: str, system: str | None) -> list[dict]:
@@ -363,6 +375,25 @@ def chat_qwen_json_with_source(
     return _call_json_chain(_build_messages(prompt, system))
 
 
+@observe_llm
+def chat_qwen_json_parsed(prompt: str, system: str | None = None) -> dict:
+    """JSON 调用 + 解析一步到位（结构化任务的标准入口）。
+
+    **为什么要它**：调用方此前都要自己写两行
+    ``raw = chat_qwen_json(...)`` + ``parse_json_response(raw)``，
+    全仓重复 6 处；再在 except 里逐字抄一份四元组异常集
+    （``JSON_TASK_ERRORS``）——任一处漏抄 ``LLMUnavailableError``，
+    就回到"openai 原生异常穿透节点、整轮请求被打挂"的老问题。
+
+    :param prompt: Prompt（须已要求模型输出 JSON）
+    :param system: System Prompt，可为空
+    :return: 解析后的字典
+    :raises LLMUnavailableError: 降级链耗尽（调用方应走确定性兜底）
+    :raises ValueError: 响应中确实不含合法 JSON 对象
+    """
+    return parse_json_response(chat_qwen_json(prompt, system))
+
+
 def _call_json_chain(messages: list[dict]) -> tuple[str, str]:
     """JSON 模式的降级链，返回 ``(内容, 来源)``。
 
@@ -392,6 +423,40 @@ def _call_json_chain(messages: list[dict]) -> tuple[str, str]:
         ],
     )
     return content, "本地" if hop_name == _LOCAL_HOP_NAME else "云端"
+
+
+#: 裁判模型单次调用超时（秒）。**刻意不并入 `*_TIMEOUT` 配置项**：
+#: 它是"离线评测不被单条样本拖死"的边界，与在线链路的 30s / 15s 场景不同
+#: （裁判要一次比对整段答案，输出上限 2048 token），随环境调整没有意义。
+#: 写常量也避免了再多一处要在 .env.example / compose 之间同步的配置。
+JUDGE_TIMEOUT_SECONDS = 120
+
+
+def build_judge_client() -> AsyncOpenAI:
+    """构造 RAGAS 裁判模型客户端（异步，OpenAI 兼容端点）。
+
+    **为什么收进基础设施层**：评测侧此前在 `evaluation/ragas_eval.py` 里直接
+    `AsyncOpenAI(...)`，超时策略与主链路各写一套——同一份配置在两处解释，迟早漂移。
+    现在评测侧只调用本工厂。
+
+    **与主链路的三处刻意不同**（都是评测场景的要求，不是遗漏）：
+    - 用**异步**客户端：RAGAS 新指标逐条 `ascore()`，同步客户端只能串行等待
+    - 型号必须是**带日期后缀的快照版**：模型静默升级会让不同迭代的分数不可比
+      （选型理由见 config/settings.py 的 JUDGE_MODEL）
+    - 缺密钥时**直接报错而不降级**：评测拿不到裁判就该立刻失败，
+      不能悄悄换模型出分——分数不可比，比拿不到分数更糟（主链路的降级链在此有害）
+
+    :raises RuntimeError: 未配置裁判密钥
+    """
+    if not settings.JUDGE_API_KEY:
+        raise RuntimeError(
+            "裁判模型缺少密钥：请设置系统环境变量 QWEN（或 .env 中的 JUDGE_API_KEY）"
+        )
+    return AsyncOpenAI(
+        api_key=settings.JUDGE_API_KEY,
+        base_url=settings.JUDGE_BASE_URL,
+        timeout=JUDGE_TIMEOUT_SECONDS,
+    )
 
 
 def parse_json_response(raw: str) -> dict:

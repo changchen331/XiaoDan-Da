@@ -12,9 +12,9 @@
 候选池与过滤条件（见该节点 docstring），让下一次生成有新的上下文
 可用，而不是把同一份结果再生成一遍。
 """
-from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
 from agent.state import AgentState, QualityResult
 from config.settings import settings
+from infra.llm_clients import JSON_TASK_ERRORS, chat_qwen_json_parsed
 
 QUALITY_PROMPT = """请评估以下校园问答的回答质量，检查两个维度：
 
@@ -55,14 +55,13 @@ def quality_check(state: AgentState) -> dict:
     )
 
     try:
-        raw = chat_qwen_json(prompt)
-        result = parse_json_response(raw)
+        result = chat_qwen_json_parsed(prompt)
         quality = QualityResult(
             passed=bool(result["passed"]),
             score=float(result["score"]),
             reason=str(result["reason"]),
         )
-    except (ValueError, KeyError, TypeError, LLMUnavailableError) as parse_error:
+    except JSON_TASK_ERRORS as parse_error:
         # 评估自身失败时放行：不能因质检组件故障阻塞回答
         # （含降级链耗尽：两端点同时故障时也必须放行，而非抛异常中断整轮）
         print(f"[quality_check] 质量评估失败，放行: {parse_error}")

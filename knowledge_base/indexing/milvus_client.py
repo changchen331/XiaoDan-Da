@@ -26,10 +26,23 @@ from pymilvus import (
 
 from config.settings import settings
 
+# 进程级单例：MilvusClient 内部持有连接与线程资源，重复创建等于反复重建它们。
+# 惰性创建（首次调用时才连），与 retrieval.py 的 reranker 单例写法一致
+_client: "MilvusClient | None" = None
+
 
 def get_milvus_client() -> MilvusClient:
-    """获取 Milvus 客户端（MilvusClient 内部维护连接池，可重复创建）。"""
-    return MilvusClient(uri=settings.MILVUS_URI)
+    """获取 Milvus 客户端（进程级惰性单例）。
+
+    **此前是工厂**：每次调用都 `MilvusClient(uri=...)` 新建一个实例，docstring 却写
+    "内部维护连接池，可重复创建"——注释描述的语义（可安全复用）与实现的语义
+    （每次都是新实例）并不等价：一次建库流程（建集合 → 建 FAQ 索引 → 写入 → …）
+    会创建 6 个客户端。改为单例后调用点的语义与注释终于一致。
+    """
+    global _client
+    if _client is None:
+        _client = MilvusClient(uri=settings.MILVUS_URI)
+    return _client
 
 
 def ensure_collection_loaded(client: MilvusClient, collection_name: str) -> None:

@@ -1,7 +1,6 @@
 """节点 2：上报——高危情况触发，记录到独立数据库并通知相关人员。纯逻辑节点。"""
 import threading
 
-from agent.llm_clients import LLMUnavailableError
 from agent.state import AgentState
 from config.settings import settings
 from emotion.reporting import (
@@ -10,6 +9,7 @@ from emotion.reporting import (
     submit_report,
 )
 from emotion.semantic import judge_referent
+from infra.llm_clients import JSON_TASK_ERRORS
 
 
 def report(state: AgentState) -> dict:
@@ -55,5 +55,5 @@ def _annotate_referent(alert_id: int, text: str) -> None:
         return
     try:
         annotate_alert_referent(alert_id, judge_referent(text))
-    except (LLMUnavailableError, ValueError, KeyError, TypeError) as referent_error:
+    except JSON_TASK_ERRORS as referent_error:
         print(f"[report] 指向标注失败，记录维持未标注: {referent_error}")

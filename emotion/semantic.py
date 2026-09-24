@@ -25,8 +25,8 @@
 （`evaluation/emotion_semantic_ab.py`）。生产默认走 A/B 胜出的形态。
 """
 
-from agent.llm_clients import chat_qwen_json_with_source, parse_json_response
 from config.settings import settings
+from infra.llm_clients import chat_qwen_json_with_source, parse_json_response
 
 #: 等级由低到高的序号，用于"多次采样取最高"的比较（顺序即 settings.EMOTION_LABELS）
 _LEVEL_ORDER: dict = {label: index for index, label in enumerate(settings.EMOTION_LABELS)}

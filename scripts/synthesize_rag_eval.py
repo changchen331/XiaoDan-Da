@@ -30,7 +30,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
+from infra.llm_clients import JSON_TASK_ERRORS, chat_qwen_json_parsed
 from knowledge_base.preprocessing.chunker import chunk_by_type
 from knowledge_base.preprocessing.corpus import (
     iter_document_records,
@@ -155,8 +155,8 @@ def generate_one(candidate: dict) -> dict | None:
     )
     for attempt in range(2):
         try:
-            payload = parse_json_response(chat_qwen_json(prompt))
-        except (LLMUnavailableError, ValueError) as error:
+            payload = chat_qwen_json_parsed(prompt)
+        except JSON_TASK_ERRORS as error:
             print(f"[synthesize_rag] {candidate['doc']} 生成失败（第 {attempt + 1} 次）：{error}")
             time.sleep(2)
             continue

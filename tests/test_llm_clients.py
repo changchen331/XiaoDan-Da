@@ -4,6 +4,25 @@ import pytest
 
 from config.settings import settings
 
+
+@pytest.fixture(autouse=True)
+def _dummy_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """给占位密钥并清掉已缓存的客户端：**测试不得依赖开发机的 .env**。
+
+    为什么需要它：OpenAI 客户端在**构造期**就要求非空密钥（空串会抛
+    ``OpenAIError: Missing credentials``），而本机 .env 有真 key、CI 没有——
+    同一份用例在两处结论不同（本文件早已用"钉住 FALLBACK 开关"防过同类耦合，
+    密钥这条当时漏了，CI 首跑才暴露）。占位值让断言只覆盖降级链的逻辑。
+    """
+    import infra.llm_clients as llm
+
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "LIGHT_LLM_API_KEY", "test-key")
+    # 缓存单例必须一起清掉：否则会复用上一次用真实密钥建好的客户端，
+    # 占位值就形同虚设（本机"能过"、CI"不能过"正是这么来的）
+    monkeypatch.setattr(llm, "_deepseek_client", None)
+    monkeypatch.setattr(llm, "_light_llm_client", None)
+
 # ==================== 降级链终点兜底 ====================
 
 
@@ -21,7 +40,7 @@ def test_terminal_fallback_raises_typed_error(
     """
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     monkeypatch.setattr(llm, "_call_llm", _boom)
 
     with pytest.raises(llm.LLMUnavailableError):
@@ -35,12 +54,12 @@ def test_intent_route_survives_llm_outage(monkeypatch: pytest.MonkeyPatch) -> No
     import importlib
 
     intent_module = importlib.import_module("agent.nodes.intent_route")
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
 
-    def _outage(prompt: str, system: str | None = None) -> str:
+    def _outage(prompt: str, system: str | None = None) -> dict:
         raise llm.LLMUnavailableError("两端点均不可用")
 
-    monkeypatch.setattr(intent_module, "chat_qwen_json", _outage)
+    monkeypatch.setattr(intent_module, "chat_qwen_json_parsed", _outage)
 
     result = intent_module.intent_route({"user_input": "选课什么时候截止"})
     assert result["intent"].category == "简单问答"
@@ -52,12 +71,12 @@ def test_quality_check_passes_on_llm_outage(monkeypatch: pytest.MonkeyPatch) -> 
     import importlib
 
     quality_module = importlib.import_module("agent.nodes.quality_check")
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
 
-    def _outage(prompt: str, system: str | None = None) -> str:
+    def _outage(prompt: str, system: str | None = None) -> dict:
         raise llm.LLMUnavailableError("两端点均不可用")
 
-    monkeypatch.setattr(quality_module, "chat_qwen_json", _outage)
+    monkeypatch.setattr(quality_module, "chat_qwen_json_parsed", _outage)
 
     result = quality_module.quality_check(
         {
@@ -120,7 +139,7 @@ def test_llm_clients_are_reused() -> None:
     """客户端对象必须复用（OpenAI 内部持有连接池，每次新建等于丢弃 keep-alive）。"""
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     assert llm._get_deepseek_client() is llm._get_deepseek_client()
     assert llm._get_light_llm_client() is llm._get_light_llm_client()
 
@@ -131,7 +150,7 @@ def test_local_fallback_disabled_by_default(
     """本地兜底默认关闭：未启用时应抛 LLMUnavailableError，而不是静默返回空串。"""
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     monkeypatch.setattr(llm, "_call_llm", _boom)
     monkeypatch.setattr(settings, "FALLBACK_LLM_ENABLED", False)
 
@@ -149,7 +168,7 @@ def test_local_fallback_takes_over_when_cloud_down(
     """
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     models_called: list[str] = []
 
     def _only_local_works(
@@ -176,7 +195,7 @@ def test_generate_entry_does_not_use_local_fallback(
     """生成入口刻意不接本地小模型：云端全挂时应抛异常，由调用方给保守兜底文案。"""
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     monkeypatch.setattr(llm, "_call_llm", _boom)
     monkeypatch.setattr(settings, "FALLBACK_LLM_ENABLED", True)
     monkeypatch.setattr(settings, "FALLBACK_LLM_MODEL", "qwen2.5:7b-instruct")
@@ -193,7 +212,7 @@ def test_qwen_json_skips_retry_when_endpoint_unreachable(
 
     import openai
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     models_called: list[str] = []
 
     def _tracked(
@@ -226,7 +245,7 @@ def test_qwen_json_still_retries_on_other_errors(
     """
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     models_called: list[str] = []
 
     def _tracked(
@@ -262,7 +281,7 @@ def test_qwen_json_with_source_reports_cloud_and_local(
     """
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
 
     # 场景一：轻量端点正常应答 → 云端
     monkeypatch.setattr(llm, "_call_llm", lambda *a, **k: '{"ok": true}')
@@ -292,7 +311,7 @@ def test_thinking_switch_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     import importlib
 
-    llm = importlib.import_module("agent.llm_clients")
+    llm = importlib.import_module("infra.llm_clients")
     captured: list[dict] = []
 
     def _capture(

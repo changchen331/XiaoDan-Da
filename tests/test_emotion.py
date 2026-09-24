@@ -87,6 +87,20 @@ def test_emotion_levels_have_single_source() -> None:
         assert level in whitelist
 
 
+def test_intent_categories_have_single_source() -> None:
+    """意图四类单一来源：节点白名单必须从 IntentResult 的类型白名单派生。
+
+    与上一用例同源的问题（T25）：意图类别此前在 4 处各写一份字面量副本，
+    改一处忘另一处就是"白名单不认自己产出的值"。这里断言派生关系成立。
+    """
+    from agent.nodes.intent_route import VALID_CATEGORIES
+    from agent.state import INTENT_CATEGORIES, IntentResult
+
+    whitelist = get_args(IntentResult.model_fields["category"].annotation)
+    assert INTENT_CATEGORIES == whitelist
+    assert VALID_CATEGORIES == whitelist
+
+
 def test_emotion_detect_moderate_rule_does_not_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -187,7 +201,7 @@ def test_semantic_failure_keeps_baseline(monkeypatch: pytest.MonkeyPatch) -> Non
 
     与 faq_verify 的"信任阈值"同构：增强层故障不改变基线判决。
     """
-    import agent.llm_clients as llm
+    import infra.llm_clients as llm
 
     _stub_semantic(monkeypatch, [llm.LLMUnavailableError("三跳均失败")])
     result = detect_emotion("明天图书馆几点开门？")

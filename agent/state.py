@@ -6,9 +6,11 @@
 - 全部字段 total=False：构造初始 State 时允许只传部分键（LangGraph 增量合并）
 """
 
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, get_args
 
 from pydantic import BaseModel
+
+from config.settings import settings
 
 
 class EmotionResult(BaseModel):
@@ -87,3 +89,21 @@ class AgentState(TypedDict, total=False):
     # ===== 输出控制 =====
     final_response: str  # 最终输出给用户的回答
     should_end: bool  # 是否结束流程
+
+
+# ==================== 取值单一来源 ====================
+# 上面的 Literal 是给类型检查器与编辑器看的，而**运行时的唯一声明处**是
+# settings.EMOTION_LABELS（情绪四级）与本模块的 IntentResult（意图四类）。
+# 两处漂移过一次：规则引擎输出"中度"、状态白名单只认"中度困扰"→ 构造
+# EmotionResult 时 ValidationError，**整图崩溃**；而逐段单测全部通过，
+# 因为每个模块只断言自己的字面量。
+#
+# 因此这里在**导入时**校验一次：漂移立刻变成"启动即失败"，
+# 而不是"跑到某条特定消息才崩"。
+
+#: 合法意图类别（从 IntentResult 的类型白名单派生，避免第二份字面量副本）
+INTENT_CATEGORIES: tuple = get_args(IntentResult.model_fields["category"].annotation)
+
+assert set(get_args(EmotionResult.model_fields["level"].annotation)) == set(
+    settings.EMOTION_LABELS
+), "EmotionResult.level 的取值必须与 settings.EMOTION_LABELS 完全一致"

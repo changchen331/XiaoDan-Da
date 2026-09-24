@@ -1,8 +1,8 @@
 """节点 3：关怀回复——高危场景优先处理情绪，暂缓回答原始问题。"""
 
-from agent.llm_clients import chat_deepseek
 from agent.state import AgentState
 from config.settings import settings
+from infra.llm_clients import chat_deepseek
 
 # 高危场景的回复模板（模型调用失败时兜底，保证求助信息一定送达）
 # 渠道信息从配置注入而非硬编码：与 care_suffix 保持同一原则——

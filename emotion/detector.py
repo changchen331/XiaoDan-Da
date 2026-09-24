@@ -22,10 +22,10 @@
 
 import threading
 
-from agent.llm_clients import LLMUnavailableError
 from config.settings import settings
 from emotion.rule_engine import LEVEL_HIGH, LEVEL_MID, LEVEL_NORMAL, RuleEngine
 from emotion.semantic import REFERENT_SELF, judge_semantic_stable
+from infra.llm_clients import JSON_TASK_ERRORS
 
 # 进程级单例：规则引擎（纯正则，构造开销小，但单例避免重复编译正则）
 _rule_engine: "RuleEngine | None" = None
@@ -125,7 +125,7 @@ def _apply_semantic(text: str, baseline: dict) -> dict:
     """
     try:
         verdict = judge_semantic_stable(text)
-    except (LLMUnavailableError, ValueError, KeyError, TypeError) as semantic_error:
+    except JSON_TASK_ERRORS as semantic_error:
         print(f"[detector] 语义判别不可用，维持前两层结论: {semantic_error}")
         return baseline
 

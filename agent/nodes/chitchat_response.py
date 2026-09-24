@@ -4,8 +4,8 @@
 处于轻度/中度负面情绪，统一经过下游 care_suffix 节点获得分级关怀，
 再由其条件路由决定不写长期记忆直接结束。
 """
-from agent.llm_clients import chat_deepseek
 from agent.state import AgentState
+from infra.llm_clients import chat_deepseek
 
 # 两条安全约束（内部机制不外泄 / 不迎合功利选课）在闲聊与生成两个入口都写：
 # 红队用例 off_topic_06 / privacy_05 的路由落点不保证稳定（可能被判为

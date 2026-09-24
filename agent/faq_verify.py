@@ -12,7 +12,7 @@
 无法命中"是确定性故障，两害相权取其轻。
 """
 
-from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
+from infra.llm_clients import JSON_TASK_ERRORS, chat_qwen_json_parsed
 
 VERIFY_PROMPT = """请校验一条 FAQ 匹配结果是否可以安全地直接返回给用户，检查两个维度：
 
@@ -42,7 +42,7 @@ def verify_faq_match(
         校验调用自身失败时返回 True（信任阈值，见模块说明）
     """
     try:
-        raw = chat_qwen_json(
+        result = chat_qwen_json_parsed(
             VERIFY_PROMPT.format(
                 query=query,
                 language=response_language,
@@ -50,9 +50,8 @@ def verify_faq_match(
                 answer=answer,
             )
         )
-        result = parse_json_response(raw)
         return bool(result["answer_match"]) and bool(result["language_match"])
-    except (ValueError, KeyError, TypeError, LLMUnavailableError) as verify_error:
+    except JSON_TASK_ERRORS as verify_error:
         # 信任阈值策略：校验层故障时放行（低概率错误命中 vs 确定性快路径失效）
         print(f"[faq_verify] 校验调用失败，信任阈值直接放行: {verify_error}")
         return True

@@ -2,8 +2,8 @@
 
 from datetime import date
 
-from agent.llm_clients import parse_json_response
 from config.settings import get_current_semester
+from infra.llm_clients import parse_json_response
 
 # ==================== 工具函数 ====================
 

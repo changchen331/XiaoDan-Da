@@ -12,10 +12,10 @@ def test_faq_verify_trust_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """信任阈值策略：校验调用自身异常时放行（快路径不因增强层故障失效）。"""
     import agent.faq_verify as faq_verify_module
 
-    def _broken_call(prompt: str, system: str | None = None) -> str:
+    def _broken_call(prompt: str, system: str | None = None) -> dict:
         raise ValueError("模拟端点不可达")
 
-    monkeypatch.setattr(faq_verify_module, "chat_qwen_json", _broken_call)
+    monkeypatch.setattr(faq_verify_module, "chat_qwen_json_parsed", _broken_call)
     assert (
         faq_verify_module.verify_faq_match(
             "校园卡丢了怎么办", "校园卡挂失流程", "请到一卡通中心挂失。", "中文"
@@ -30,8 +30,8 @@ def test_faq_verify_rejects_answer_mismatch(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(
         faq_verify_module,
-        "chat_qwen_json",
-        lambda prompt, system=None: '{"answer_match": false, "language_match": true}',
+        "chat_qwen_json_parsed",
+        lambda prompt, system=None: {"answer_match": False, "language_match": True},
     )
     assert (
         faq_verify_module.verify_faq_match(
@@ -47,8 +47,8 @@ def test_faq_verify_rejects_language_mismatch(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(
         faq_verify_module,
-        "chat_qwen_json",
-        lambda prompt, system=None: '{"answer_match": true, "language_match": false}',
+        "chat_qwen_json_parsed",
+        lambda prompt, system=None: {"answer_match": True, "language_match": False},
     )
     assert (
         faq_verify_module.verify_faq_match(
@@ -229,10 +229,10 @@ def test_intent_route_fallback_keeps_language(monkeypatch: pytest.MonkeyPatch) -
 
     intent_route_module = importlib.import_module("agent.nodes.intent_route")
 
-    def _broken_call(prompt: str, system: str | None = None) -> str:
+    def _broken_call(prompt: str, system: str | None = None) -> dict:
         raise ValueError("模拟 JSON 解析失败")
 
-    monkeypatch.setattr(intent_route_module, "chat_qwen_json", _broken_call)
+    monkeypatch.setattr(intent_route_module, "chat_qwen_json_parsed", _broken_call)
     state = {
         "user_input": "选课时间",
         "conversation_history": [],
@@ -253,9 +253,13 @@ def test_intent_route_parses_language(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         intent_route_module,
-        "chat_qwen_json",
-        lambda prompt, system=None: '{"category": "FAQ", "rewritten_query": "校园卡挂失", '
-        '"input_language": "English", "requested_language": ""}',
+        "chat_qwen_json_parsed",
+        lambda prompt, system=None: {
+            "category": "FAQ",
+            "rewritten_query": "校园卡挂失",
+            "input_language": "English",
+            "requested_language": "",
+        },
     )
     state = {
         "user_input": "How to report a lost card?",
@@ -280,9 +284,13 @@ def test_intent_route_keeps_session_language(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(
         intent_route_module,
-        "chat_qwen_json",
-        lambda prompt, system=None: '{"category": "简单问答", "rewritten_query": "图书馆开放时间", '
-        '"input_language": "中文", "requested_language": ""}',
+        "chat_qwen_json_parsed",
+        lambda prompt, system=None: {
+            "category": "简单问答",
+            "rewritten_query": "图书馆开放时间",
+            "input_language": "中文",
+            "requested_language": "",
+        },
     )
     state = {
         "user_input": "图书馆开放时间？",
@@ -304,9 +312,13 @@ def test_intent_route_explicit_request_overrides(
 
     monkeypatch.setattr(
         intent_route_module,
-        "chat_qwen_json",
-        lambda prompt, system=None: '{"category": "简单问答", "rewritten_query": "library hours", '
-        '"input_language": "English", "requested_language": "中文"}',
+        "chat_qwen_json_parsed",
+        lambda prompt, system=None: {
+            "category": "简单问答",
+            "rewritten_query": "library hours",
+            "input_language": "English",
+            "requested_language": "中文",
+        },
     )
     state = {
         "user_input": "Please reply in Chinese.",
@@ -376,6 +388,24 @@ class _StubFaqIndex:
         }
 
 
+def _stub_faq_module(monkeypatch: pytest.MonkeyPatch, scores: dict) -> None:
+    """注入假 FAQ 模块，**不导入真实模块**。
+
+    为什么必须注入而不是 ``monkeypatch.setattr("knowledge_base.faq.get_faq_index", ...)``：
+    字符串目标会让 pytest 去 import 该模块，而真实的 ``knowledge_base.faq`` 顶层会拉起
+    FlagEmbedding → transformers 整条重链（本地实测约 11s），且**依赖链能不能导入
+    取决于运行环境**——CI 上实测过一次 transformers 惰性属性解析失败
+    （``Could not import module 'TrainingArguments'``），单测因此红在依赖上。
+    本用例要验的是"匹配与校验的输入口径"，不该为依赖链的可导入性负责。
+    """
+    import sys
+    import types
+
+    fake_faq = types.ModuleType("knowledge_base.faq")
+    fake_faq.get_faq_index = lambda: _StubFaqIndex(scores)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "knowledge_base.faq", fake_faq)
+
+
 def test_faq_precheck_verifies_with_user_input(monkeypatch: pytest.MonkeyPatch) -> None:
     """FAQ 校验必须用**用户原话**，而不是改写后的 query。
 
@@ -387,10 +417,7 @@ def test_faq_precheck_verifies_with_user_input(monkeypatch: pytest.MonkeyPatch) 
 
     retrieve_module = importlib.import_module("agent.nodes.retrieve")
 
-    monkeypatch.setattr(
-        "knowledge_base.faq.get_faq_index",
-        lambda: _StubFaqIndex({"用户原话问句": 0.95}),
-    )
+    _stub_faq_module(monkeypatch, {"用户原话问句": 0.95})
     captured: dict = {}
 
     def _fake_verify(query: str, question: str, answer: str, language: str) -> bool:
@@ -416,10 +443,7 @@ def test_faq_precheck_takes_higher_score_of_both_queries(
 
     retrieve_module = importlib.import_module("agent.nodes.retrieve")
 
-    monkeypatch.setattr(
-        "knowledge_base.faq.get_faq_index",
-        lambda: _StubFaqIndex({"改写问句": 0.86, "原话问句": 0.95}),
-    )
+    _stub_faq_module(monkeypatch, {"改写问句": 0.86, "原话问句": 0.95})
     monkeypatch.setattr(retrieve_module, "verify_faq_match", lambda *a, **k: True)
 
     matched = retrieve_module._faq_precheck("改写问句", "中文", "原话问句")
@@ -604,7 +628,7 @@ def test_annotation_writes_referent_and_swallows_failure(
     """补标注：把指向写回记录；语义层故障时只打日志，不影响上报本身。"""
     import importlib
 
-    import agent.llm_clients as llm
+    import infra.llm_clients as llm
 
     report_module = importlib.import_module("agent.nodes.report")
     written: list = []

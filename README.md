@@ -260,10 +260,13 @@ XiaoDan-Da/
 ├── docker-compose.yml            # 服务编排（Milvus/PostgreSQL/API/Langfuse）
 ├── .env.example                  # 环境变量模板（含全部可调参数）
 ├── config/settings.py            # 全局配置中心
+├── infra/                        # 基础设施：外部依赖适配层
+│   ├── db.py                     #   PostgreSQL 连接（psycopg3，退出显式 close）
+│   └── llm_clients.py            #   LLM 客户端 + 三级降级链 + 思考模式开关
 ├── agent/                        # 模块三：Agent 核心引擎
 │   ├── graph.py                  #   LangGraph 11 节点编排 + Checkpointer
 │   ├── state.py                  #   AgentState 与节点结果模型
-│   ├── llm_clients.py            #   LLM 客户端 + 三级降级链 + 思考模式开关
+│   ├── query_filter.py           #   检索过滤表达式（身份 + 学期时效，两个检索节点共用）
 │   ├── faq_verify.py             #   FAQ 命中轻量校验（答案适配 + 语言匹配）
 │   ├── memory_store.py           #   长期记忆读写
 │   └── nodes/                    #   11 个节点实现

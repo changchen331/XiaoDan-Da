@@ -10,9 +10,9 @@
 长期记忆：调用轻量模型生成一句话摘要，写入 user_memory 表，
 供后续会话的生成环节做个性化注入。
 """
-from agent.llm_clients import chat_qwen
 from agent.memory_store import insert_memory
 from agent.state import AgentState
+from infra.llm_clients import chat_qwen
 
 SUMMARY_PROMPT = """请用一句话概括以下对话的核心信息，包括用户问了什么、得到了什么答案。
 要求：不超过 50 字，去掉所有修饰成分，只保留事实。

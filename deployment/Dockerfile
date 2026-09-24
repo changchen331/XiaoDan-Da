@@ -33,6 +33,7 @@ RUN uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
 
 # 复制项目代码（按模块分组拷贝，data/ 与 models/ 通过 volume 挂载注入）
 COPY config/ config/
+COPY infra/ infra/
 COPY agent/ agent/
 COPY knowledge_base/ knowledge_base/
 COPY emotion/ emotion/

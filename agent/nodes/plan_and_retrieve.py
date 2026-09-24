@@ -11,10 +11,10 @@
 4. Reranker 以原始问题为锚做全局重排，取 top8
    （比简单问答的 top5 略宽：复杂问题需要更多素材做综合）
 """
-from agent.llm_clients import LLMUnavailableError, chat_qwen_json, parse_json_response
-from agent.nodes.retrieve import build_filter_expr
+from agent.query_filter import build_filter_expr
 from agent.state import AgentState
 from config.settings import settings
+from infra.llm_clients import JSON_TASK_ERRORS, chat_qwen_json_parsed
 
 # 复杂查询的拆解指令：子查询必须各自独立可检索
 DECOMPOSE_PROMPT = """请将以下复杂问题拆解为2-4个独立的子查询。
@@ -71,10 +71,11 @@ def _decompose(query: str) -> list:
     :return: 子查询列表；拆解失败时回退为 [原始query]（退化为简单检索）
     """
     try:
-        raw = chat_qwen_json(DECOMPOSE_PROMPT.format(query=query))
-        sub_queries = parse_json_response(raw)["sub_queries"]
+        sub_queries = chat_qwen_json_parsed(DECOMPOSE_PROMPT.format(query=query))[
+            "sub_queries"
+        ]
         if isinstance(sub_queries, list) and sub_queries:
             return [str(sq) for sq in sub_queries]
-    except (ValueError, KeyError, TypeError, LLMUnavailableError) as parse_error:
+    except JSON_TASK_ERRORS as parse_error:
         print(f"[plan_and_retrieve] 子查询拆解失败，按单查询处理: {parse_error}")
     return [query]
