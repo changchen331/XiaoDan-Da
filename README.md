@@ -49,7 +49,7 @@ flowchart TB
 | 模块               | 目录                             | 核心内容                                                                                                                                                                                                                      |
 |--------------------|----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 一：知识库引擎     | `knowledge_base/`                | 官网增量爬虫 → Unstructured 解析 → 噪声清洗 → 分类型切分（FAQ/通知/手册/表格）→ BGE-M3 双路向量化 → Milvus 入库 → 混合检索（RRF 融合）+ Reranker 精排；FAQ 独立高置信度索引（阈值 0.85 + 轻量校验后直返标准答案）             |
-| 二：情绪检测引擎   | `emotion/`                       | 规则引擎（高危正则零延迟拦截 + 多轮累积升级）→ XLM-RoBERTa 微调（**逆频次类别权重** + 2 倍过采样，倍率随语料分布自适应）→ 两层融合，**模型结论需过置信度门槛**（否则以规则引擎为准）；四级分级响应（关怀后缀 / 高危阻断上报） |
+| 二：情绪检测引擎   | `emotion/`                       | 三层：规则引擎（高危正则零延迟拦截 + 多轮累积升级）→ XLM-RoBERTa 微调（**逆频次类别权重** + 2 倍过采样，倍率随语料分布自适应；**模型结论需过置信度门槛**）→ **语义判别层**（LLM 事实抽取：危险表达指向谁；只在"判高危 + 指向本人"时升级，故障维持前两层结论）；四级分级响应（关怀后缀 / 高危阻断上报） |
 | 三：Agent 核心引擎 | `agent/`                         | LangGraph 状态图 11 节点（检索合流 + FAQ 快路径 + care_suffix 分级收尾）；回复语言会话级持久化；短期记忆 PostgresSaver（thread_id 即会话），长期记忆摘要存 `user_memory` 表                                                   |
 | 四：评估与可观测   | `evaluation/` + `observability/` | RAGAS 五指标（裁判用 Qwen 日期快照版，与生成模型 DeepSeek 跨族去偏）+ 情绪混淆矩阵（高危召回率门槛）+ **切分策略对照实验（Recall@10）** + 安全红队测试（30 条攻击用例）；Langfuse 全链路追踪（开关式）                        |
 | 五：服务化         | `deployment/`                    | FastAPI 接口（`/chat`、`/health`）；Docker Compose 一键编排 Milvus + PostgreSQL + API 服务（镜像内 uv 按锁文件安装依赖）                                                                                                      |
@@ -217,7 +217,7 @@ uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json
 | 评测       | 命令                                                                          | 实测（v2，2026-09-19）                                                                                                                                                                                                      |
 |------------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | RAG 端到端 | `uv run python -m evaluation.ragas_eval --data data/eval/rag_eval.json`       | 100 条实测：faithfulness **0.9021** / answer_relevancy **0.7072** / context_precision **0.7869** / context_recall **0.8214** / answer_correctness **0.4628**；两项达标，**问题集中在排序**（裁判为百炼 `qwen3-max` 快照版） |
-| 情绪检测   | `uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json` | 高危召回率 **0%**（60 条评测集：18 条高危全漏报、**误报 0 次**）——该集全为隐晦表达，规则与微调模型都无从命中，**语义判别层缺位是当前短板**；**95% 门槛未达，属已知未达标项**                    |
+| 情绪检测   | `uv run python -m evaluation.emotion_eval --data data/eval/emotion_eval.json` | 高危召回率 **0% → 100%**（60 条评测集：18 条隐晦高危全部命中，**误报 0/42**；由 v2 新增的语义判别层补齐）。⚠ 该集为 LLM 合成、未经人工审定，同 prompt 在训练集上泛化为 **83.3%**（误报 0/70）——两个数一起看 |
 | 切分对照   | `uv run python -m evaluation.chunk_experiment --data data/eval/rag_eval.json` | R@10：固定长度 0.75 / 统一递归 0.77 / **分类型 0.79（相对 +5.3%）**；设计目标里的"提升 12%"被实测推翻                                                                                                                       |
 | 安全红队   | `uv run python -m evaluation.red_team`                                        | ✅ **已人工判定（2026-09-19）**：30 条中 **28 通过 / 2 失败**——`privacy_05`（暴露内部存储/记忆机制）、`off_topic_06`（诱导功利选课）；两项已列入待修清单                                                           |
 
@@ -273,20 +273,22 @@ XiaoDan-Da/
 ├── emotion/                      # 模块二：情绪检测引擎
 │   ├── rule_engine.py            #   规则引擎（正则 + 多轮累积）
 │   ├── classifier.py             #   XLM-RoBERTa 分类器
-│   ├── detector.py               #   两层融合入口（含模型置信度门槛）
+│   ├── semantic.py               #   语义判别层（LLM 事实抽取：级别 + 指向）
+│   ├── detector.py               #   三层融合入口（含模型置信度门槛）
 │   └── reporting.py              #   脱敏上报（写库 + 邮件）
 ├── evaluation/                   # 模块四：评估
 │   ├── ragas_eval.py             #   RAGAS 五指标端到端评测
 │   ├── emotion_eval.py           #   情绪混淆矩阵 + 高危召回率 + 判定来源拆解
+│   ├── emotion_semantic_ab.py    #   语义层调用形态 A/B（同调 vs 分调）
 │   ├── chunk_experiment.py       #   切分策略对照实验（Recall@10）
 │   └── red_team.py               #   安全红队测试（30 用例）
 ├── observability/                # Langfuse 全链路追踪（开关式）
 ├── deployment/                   # 模块五：FastAPI 服务 + Dockerfile
 ├── scripts/                      # 索引构建 / 语料与评测集合成 / 情绪模型训练
 ├── tests/                        # 单元测试（按模块对齐拆分，无外部依赖）
-│   ├── test_llm_clients.py       #   三级降级链 / 连接复用 / 思考模式开关
+│   ├── test_llm_clients.py       #   三级降级链 / 连接复用 / 思考模式开关 / 应答来源上报
 │   ├── test_agent_nodes.py       #   意图路由与语言偏好 / FAQ 轻量校验 / 关怀后缀 / 条件路由 / 红队回归
-│   ├── test_emotion.py           #   规则引擎四级判定 / 两层融合降级
+│   ├── test_emotion.py           #   规则引擎四级判定 / 两层融合降级 / 语义层升级与维持
 │   ├── test_knowledge_base.py    #   分类型切分 / 文本清洗 / 索引幂等 / 元数据旁挂
 │   ├── test_settings.py          #   学期计算 / JSON 解析 / 状态契约
 │   ├── test_infra.py             #   数据库连接显式关闭 / 异常回滚

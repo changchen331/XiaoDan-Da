@@ -246,6 +246,37 @@ def test_qwen_json_still_retries_on_other_errors(
     ]
 
 
+def test_qwen_json_with_source_reports_cloud_and_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON 入口须回报应答来源：云端两跳记"云端"，本地兜底记"本地"。
+
+    为什么这条契约重要：情绪语义判别层据此决定**是否允许下调风险等级**——
+    本地小模型的指向抽取准确率不足（实测 62%），只允许它升级、不允许降级。
+    来源只有降级链自己知道，调用方无法从返回内容反推。
+    """
+    import importlib
+
+    llm = importlib.import_module("agent.llm_clients")
+
+    # 场景一：轻量端点正常应答 → 云端
+    monkeypatch.setattr(llm, "_call_llm", lambda *a, **k: '{"ok": true}')
+    assert llm.chat_qwen_json_with_source("测试") == ('{"ok": true}', "云端")
+
+    # 场景二：云端两跳全挂 + 本地兜底可用 → 本地
+    def _only_local_works(
+        client, model, messages, temperature, json_mode=False, extra_body=None
+    ) -> str:
+        if model == settings.FALLBACK_LLM_MODEL:
+            return '{"ok": true}'
+        raise ConnectionError("模拟云端不可达")
+
+    monkeypatch.setattr(llm, "_call_llm", _only_local_works)
+    monkeypatch.setattr(settings, "FALLBACK_LLM_ENABLED", True)
+    monkeypatch.setattr(settings, "FALLBACK_LLM_MODEL", "qwen2.5:7b-instruct")
+    assert llm.chat_qwen_json_with_source("测试") == ('{"ok": true}', "本地")
+
+
 def test_thinking_switch_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """思考模式开关：默认关闭，且按模型族转成各自参数名并真的落到调用参数上。
 

@@ -263,18 +263,49 @@ def chat_qwen_json(prompt: str, system: str | None = None) -> str:
 
     :raises LLMUnavailableError: 连本地兜底也失败时（降级链已耗尽）
     """
-    messages = _build_messages(prompt, system)
+    return _call_json_chain(_build_messages(prompt, system))[0]
+
+
+@observe_llm
+def chat_qwen_json_with_source(
+    prompt: str, system: str | None = None
+) -> tuple[str, str]:
+    """同 :func:`chat_qwen_json`，但额外回报**实际应答的端点来源**。
+
+    返回 ``(内容, 来源)``，来源取 ``"云端"`` / ``"本地"``。
+
+    **为什么需要它**：情绪语义判别层在"本地兜底模型"应答时必须收紧策略——
+    本地小模型的指向抽取准确率实测仅 62%，只允许它升级风险等级、不允许降级
+    （否则降级带来的漏报率直接等于它的错判率）。而"是否本地应答"只有降级链
+    自己知道，调用方无法从返回内容反推。
+    """
+    return _call_json_chain(_build_messages(prompt, system))
+
+
+def _call_json_chain(messages: list[dict]) -> tuple[str, str]:
+    """JSON 模式的降级链（**唯一实现**），返回 ``(内容, 来源)``。
+
+    来源：``"云端"`` = 轻量端点或 DeepSeek 应答；``"本地"`` = 本地兜底模型应答。
+
+    把 JSON 入口的降级链收敛到这一处，是因为三个 LLM 入口此前各写一套、行为已经漂移。
+    本函数承载全部跳级逻辑：
+    端点不可达 / 鉴权失败时**跳过一次注定失败的重试**（否则要白等两个超时周期），
+    其余错误才值得换普通调用再试一次。
+    """
     light_error: Exception
 
     # 第一级：原生 JSON 模式
     try:
-        return _call_llm(
-            _get_light_llm_client(),
-            settings.LIGHT_LLM_MODEL,
-            messages,
-            temperature=0.1,
-            json_mode=True,
-            extra_body=_light_extra_body(),
+        return (
+            _call_llm(
+                _get_light_llm_client(),
+                settings.LIGHT_LLM_MODEL,
+                messages,
+                temperature=0.1,
+                json_mode=True,
+                extra_body=_light_extra_body(),
+            ),
+            "云端",
         )
     except (APIConnectionError, AuthenticationError) as reach_error:
         # 端点不可达 / 鉴权失败：**重试同一端点只会再白等一个完整超时周期**，
@@ -284,12 +315,15 @@ def chat_qwen_json(prompt: str, system: str | None = None) -> str:
     except Exception:
         # 其余失败（典型是端点不支持 response_format）才值得换普通调用再试一次
         try:
-            return _call_llm(
-                _get_light_llm_client(),
-                settings.LIGHT_LLM_MODEL,
-                messages,
-                temperature=0.1,
-                extra_body=_light_extra_body(),
+            return (
+                _call_llm(
+                    _get_light_llm_client(),
+                    settings.LIGHT_LLM_MODEL,
+                    messages,
+                    temperature=0.1,
+                    extra_body=_light_extra_body(),
+                ),
+                "云端",
             )
         except Exception as plain_error:
             light_error = plain_error
@@ -297,13 +331,16 @@ def chat_qwen_json(prompt: str, system: str | None = None) -> str:
     # 第三级：轻量端点整体不可用，DeepSeek JSON 模式兜底
     print(f"[llm_clients] 轻量端点不可用，JSON 任务降级到 DeepSeek: {light_error}")
     try:
-        return _call_llm(
-            _get_deepseek_client(),
-            settings.DEEPSEEK_MODEL,
-            messages,
-            temperature=0.1,
-            json_mode=True,
-            extra_body=_deepseek_extra_body(),
+        return (
+            _call_llm(
+                _get_deepseek_client(),
+                settings.DEEPSEEK_MODEL,
+                messages,
+                temperature=0.1,
+                json_mode=True,
+                extra_body=_deepseek_extra_body(),
+            ),
+            "云端",
         )
     except Exception as deepseek_error:
         # 第四级：云端全挂 → 本地兜底模型（JSON 模式）
@@ -311,7 +348,7 @@ def chat_qwen_json(prompt: str, system: str | None = None) -> str:
             f"[llm_clients] DeepSeek 也不可用，JSON 任务转向本地兜底: {deepseek_error}"
         )
         try:
-            return _try_local_fallback(messages, 0.1)
+            return _try_local_fallback(messages, 0.1), "本地"
         except Exception as fallback_error:
             # 降级链终点：转成可判定的异常，避免 openai 原生异常穿透节点
             raise LLMUnavailableError(

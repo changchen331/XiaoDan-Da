@@ -1,21 +1,28 @@
-"""情绪检测引擎 - 两层融合入口。
+"""情绪检测引擎 - 三层融合入口。
 
 检测流程（对应架构文档模块二）：
 1. 第一层规则引擎：零延迟（纯正则匹配，<1ms）拦截最明显的危险信号，
    高危规则命中直接定级，不再经过模型 —— 这是安全兜底网，
-   确保即使分类模型遇到训练集未覆盖的表达，最危险的 case 也绝不漏掉
+   确保即使后续各层都故障，最危险的 case 也绝不漏掉
 2. 第二层分类模型：XLM-RoBERTa 语义理解，覆盖规则无法触达的隐晦表达
    （**只有模型最高概率超过 `HIGH_RISK_PROB_THRESHOLD` 时才采纳其结论**：
    低于该值时四类输出近乎均匀，argmax 只是噪声里的最大值——
    照单全收会既驳回规则引擎的中度判断，又把整条问答链路劫持成危机关怀，见下）
-3. 融合升级：规则判"中度困扰" + 模型高危概率超阈值 → 升级为"高危"
-   （两层同时给出中等风险信号时，按"宁严勿漏"原则取高）
+3. 第三层语义判别（`emotion/semantic.py`）：LLM 事实抽取，**只对规则未命中高危
+   的消息**做复核，补上规则在隐晦表达上的漏报（评测集 18 条隐晦高危命中 0 条）。
+   它在有事实依据（指向=本人）时才**升级**为高危；自身故障时维持前两层结论。
+
+**为什么"降级"不在这一层**：规则命中高危时第一层已直接返回，不再走后续各层——
+显式高危的响应必须零延迟、且不依赖任何外部服务。代价是"代他人求助"这类
+规则误报不会被语义层下调（已登记为待评估项）。
 
 性能设计：分类器为进程级单例（模型加载耗时数秒，绝不能每条消息重载）。
 """
 
+from agent.llm_clients import LLMUnavailableError
 from config.settings import settings
 from emotion.rule_engine import LEVEL_HIGH, LEVEL_MID, LEVEL_NORMAL, RuleEngine
+from emotion.semantic import REFERENT_SELF, judge_semantic_stable
 
 # 进程级单例：规则引擎（纯正则，构造开销小，但单例避免重复编译正则）
 _rule_engine: "RuleEngine | None" = None
@@ -26,15 +33,16 @@ _classifier_unavailable = False
 
 
 def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
-    """对用户输入执行两层情绪检测。
+    """对用户输入执行三层情绪检测。
 
     :param text: 用户当前输入
     :param conversation_history: 最近对话历史 [{"role", "content"}, ...]，
         供规则引擎做多轮累积检测
-    :return: {"level", "source", "confidence"}
+    :return: {"level", "source", "confidence", "referent"}
         - level: 正常 / 轻度困扰 / 中度困扰 / 高危
-        - source: 规则引擎 / 分类模型 / 规则+模型融合
+        - source: 规则引擎 / 分类模型 / 规则+模型融合 / 语义判别
         - confidence: 置信度 0-1
+        - referent: 危险表达的指向（本人/他人/引用/否定/无），未判定时为 None
     """
     global _rule_engine
 
@@ -44,9 +52,19 @@ def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
     # ===== 第一层：规则引擎（安全兜底网，高危即阻断）=====
     rule_result = _rule_engine.check(text, conversation_history)
     if rule_result["level"] == LEVEL_HIGH:
-        return {"level": LEVEL_HIGH, "source": "规则引擎", "confidence": 1.0}
+        return _result(LEVEL_HIGH, "规则引擎", 1.0)
 
     # ===== 第二层：分类模型（语义级检测）=====
+    baseline = _classify_with_model(text, rule_result)
+
+    # ===== 第三层：语义判别（只做"有依据的升级"）=====
+    if not settings.EMOTION_SEMANTIC_ENABLED:
+        return baseline
+    return _apply_semantic(text, baseline)
+
+
+def _classify_with_model(text: str, rule_result: dict) -> dict:
+    """第二层：分类模型判定（模型不可用或无区分度时以规则结论为准）。"""
     model_probs = _predict_with_model(text)
 
     if model_probs is None or max(model_probs.values()) <= (
@@ -70,7 +88,7 @@ def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
         level = (
             rule_result["level"] if rule_result["level"] == LEVEL_MID else LEVEL_NORMAL
         )
-        return {"level": level, "source": "规则引擎", "confidence": 0.6}
+        return _result(level, "规则引擎", 0.6)
 
     model_level = max(model_probs, key=model_probs.get)
 
@@ -79,17 +97,48 @@ def detect_emotion(text: str, conversation_history: list | None = None) -> dict:
         rule_result["level"] == LEVEL_MID
         and model_probs.get(LEVEL_HIGH, 0.0) > settings.HIGH_RISK_PROB_THRESHOLD
     ):
-        return {
-            "level": LEVEL_HIGH,
-            "source": "规则+模型融合",
-            "confidence": model_probs[LEVEL_HIGH],
-        }
+        return _result(LEVEL_HIGH, "规则+模型融合", model_probs[LEVEL_HIGH])
 
     # ===== 模型独立判断（正常 / 轻度 / 中度）=====
+    return _result(model_level, "分类模型", model_probs[model_level])
+
+
+def _apply_semantic(text: str, baseline: dict) -> dict:
+    """第三层：语义判别复核——只在**有事实依据**时升级为高危。
+
+    升级条件必须同时满足两条，缺一不可：
+    1. 语义层判「高危」；
+    2. 指向为「本人」——若危险表达指向他人 / 引用 / 否定（有事实依据表明
+       危险不属于提问者本人），则**不升级**。这正是"误报仅在有事实依据时处理"
+       的落地方式：语义层的高危结论本身也要经得起指向的检验。
+
+    语义层故障（降级链耗尽 / 输出非法）时**维持基线判决**——增强层故障
+    不改变基线结论，与 `faq_verify` 的"信任阈值"同构。
+    """
+    try:
+        verdict = judge_semantic_stable(text)
+    except (LLMUnavailableError, ValueError, KeyError, TypeError) as semantic_error:
+        print(f"[detector] 语义判别不可用，维持前两层结论: {semantic_error}")
+        return baseline
+
+    referent = verdict["referent"]
+    if verdict["level"] == LEVEL_HIGH and referent == REFERENT_SELF:
+        return _result(LEVEL_HIGH, "语义判别", 0.9, referent)
+
+    # 未升级：把指向作为标注带回（供上报记录区分"本人危机 / 代他人求助"），
+    # 等级仍沿用前两层结论
+    return {**baseline, "referent": referent}
+
+
+def _result(
+    level: str, source: str, confidence: float, referent: str | None = None
+) -> dict:
+    """构造检测结果（统一字段，避免各处漏写 referent）。"""
     return {
-        "level": model_level,
-        "source": "分类模型",
-        "confidence": model_probs[model_level],
+        "level": level,
+        "source": source,
+        "confidence": confidence,
+        "referent": referent,
     }
 
 

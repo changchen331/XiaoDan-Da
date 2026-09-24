@@ -15,8 +15,12 @@ class EmotionResult(BaseModel):
     """情绪检测结果（由模块二产出）。"""
 
     level: Literal["正常", "轻度困扰", "中度困扰", "高危"]
-    source: str  # 判定来源："规则引擎" / "分类模型" / "规则+模型融合"
+    source: str  # 判定来源："规则引擎" / "分类模型" / "规则+模型融合" / "语义判别"
     confidence: float  # 置信度 0-1
+    # 危险表达的指向（本人/他人/引用/否定/无），由语义判别层给出；未判定时为 None。
+    # 用途：上报记录区分"本人危机"与"代他人求助"——不把"室友活不下去"
+    # 记成提问者本人的高危事件（见 emotion/semantic.py）
+    referent: str | None = None
 
 
 class IntentResult(BaseModel):

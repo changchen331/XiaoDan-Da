@@ -141,6 +141,18 @@ class Settings:
         os.getenv("ESCALATION_ROUNDS", "3")
     )  # 连续 N 轮负面 → 升级一级
 
+    # 语义判别层（规则快路径之后的 LLM 事实抽取，见 emotion/semantic.py）。
+    # 为什么默认开启：规则引擎在隐晦表达上漏报严重（评测集 18 条高危命中 0 条），
+    # 关掉它等于放弃这部分召回；而它失败时会**维持规则结论**，不会让系统更不安全。
+    EMOTION_SEMANTIC_ENABLED: bool = (
+        os.getenv("EMOTION_SEMANTIC_ENABLED", "true").lower() == "true"
+    )
+    # 边界带（中度困扰）追加采样次数：单次判级在「中度 ↔ 高危」之间会抖动，
+    # 追加采样取最高等级以兑现"宁可误报不可漏报"。0 = 只判一次。
+    EMOTION_SEMANTIC_ESCALATION: int = int(
+        os.getenv("EMOTION_SEMANTIC_ESCALATION", "2")
+    )
+
     # ==================== 模块二：高危上报 ====================
 
     ALERT_EMAIL_ENABLED: bool = (

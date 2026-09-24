@@ -14,6 +14,7 @@ def emotion_detect(state: AgentState) -> dict:
         level=result["level"],
         source=result["source"],
         confidence=result["confidence"],
+        referent=result.get("referent"),
     )}
 
 
