@@ -25,10 +25,13 @@ ENV UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# torch 换为 CPU 版：镜像体积约为 CUDA 版的 1/6，demo 场景推理延迟完全可接受；
-# GPU 训练在宿主机进行，不进容器。此步与 lock 的差异为刻意设计
-# （uv pip 为自由安装，不受 lock 约束回滚）
-RUN uv pip install torch --index-url https://download.pytorch.org/whl/cpu \
+# torch / torchvision 一起换为 CPU 版：镜像体积约为 CUDA 版的 1/6，demo 场景推理
+# 延迟完全可接受；GPU 训练在宿主机进行，不进容器。此步与 lock 的差异为刻意设计
+# （uv pip 为自由安装，不受 lock 约束回滚）。
+# **两者必须一起换**：只换 torch 会留下「CPU torch + CUDA torchvision」的组合，
+# transformers 导入时会连带 import torchvision，报
+# `RuntimeError: operator torchvision::nms does not exist`（即 I1 的同一根因）。
+RUN uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu \
     --python /app/.venv/bin/python
 
 # 复制项目代码（按模块分组拷贝，data/ 与 models/ 通过 volume 挂载注入）

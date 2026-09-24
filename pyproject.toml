@@ -28,6 +28,14 @@ dependencies = [
     # 注意：首次使用需另执行 playwright install chromium 下载浏览器内核
     # ===== 模块二：情绪检测引擎 =====
     "torch>=2.1.0",
+    # torchvision 由 unstructured[pdf] → unstructured-inference → timm 间接引入，
+    # 但**必须在这里显式声明**：实测 [tool.uv.sources] 的 index 映射不会作用到
+    # 间接依赖——未声明时它从默认镜像解析成 PyPI 的 CPU 构建，与 cu126 的 torch
+    # 组成不匹配的一对。CI（Linux）实测该组合下 `import torchvision` 直接抛
+    # `RuntimeError: operator torchvision::nms does not exist`，transformers 也因此
+    # 无法惰性导入 TrainingArguments（即登记项 I1 的根因）。
+    # 版本成对：torch 2.14.0 ↔ torchvision 0.29.0（与 PyTorch 官方安装命令同口径）
+    "torchvision==0.29.0",
     "transformers>=4.40.0", # XLM-RoBERTa 微调与推理
     "datasets>=2.19.0",
     "scikit-learn>=1.4.0", # 评测混淆矩阵 / 训练集切分

@@ -418,3 +418,26 @@ def test_parse_file_task_reports_elapsed(tmp_path: Path) -> None:
     assert cache_key == "通知/x.txt"
     assert "error" not in parsed
     assert parsed["elapsed"] >= 0.0
+
+
+# ==================== 重依赖链可导入性（I1 回归） ====================
+
+
+def test_torch_and_torchvision_are_importable() -> None:
+    """torch 与 torchvision 必须能**一起**导入——这是一条依赖组合的回归断言。
+
+    I1 的根因正是这一对不匹配：lock 里 torch 来自 cu126 通道，而 torchvision
+    因为是间接依赖（unstructured[pdf] → unstructured-inference → timm），
+    没吃到 [tool.uv.sources] 的 index 映射，从默认镜像装成了 PyPI 的 CPU 构建。
+    Linux 上 `import torchvision` 直接抛
+    `RuntimeError: operator torchvision::nms does not exist`，连带 transformers
+    无法惰性导入 TrainingArguments（CI 首跑 2 项 FAQ 用例因此失败）。
+
+    断言只卡"能导入"这一档：导入即崩才是真正的故障模式；
+    本机 Windows 历史装的是 CPU 版 torchvision 也能正常工作，不必强求构建族一致。
+    """
+    import torch
+    import torchvision
+
+    assert torch.__version__
+    assert torchvision.__version__

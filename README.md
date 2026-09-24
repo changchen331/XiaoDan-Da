@@ -87,25 +87,26 @@ cp .env.example .env
 # 准备数据（见下节"数据准备"）
 ```
 
-GPU 训练说明：`uv sync` 在 Windows 上安装的 torch 为 CPU 版；本机实测该构建下
-BGE-Reranker 单次检索耗时 25–33s（全花在 CPU 上），换成 CUDA 构建后降到 **5.1s**。
-需要 GPU 推理或训练情绪模型时，按显卡驱动选择 CUDA 通道重装 torch
-（不经过锁文件，属"自由安装"）：
-
-```bash
-# 通道按显卡算力选：cu126 与本机 RTX 4070 Laptop（compute capability 8.9）匹配
-uv pip install torch --index-url https://download.pytorch.org/whl/cu126 --upgrade
-```
+GPU / CUDA 说明：`uv sync` 按 `uv.lock` 安装 **cu126 通道**的 torch 与 torchvision
+（两者在 `pyproject.toml` 的 `[tool.uv.sources]` 里都指向该通道）。本机实测 CUDA 构建下
+BGE-Reranker 单次检索 **5.1s**，CPU 构建为 25–33s。
+**两者必须来自同一通道**：混装（如 CUDA 版 torch 配 CPU 版 torchvision）会在导入时
+直接报 `operator torchvision::nms does not exist`。
 
 若该源在国内网络不可用（实测 download.pytorch.org 仅约 0.35 MB/s 且丢包），
 可直接下 wheel 再本地安装（阿里云镜像 `mirrors.aliyun.com/pytorch-wheels/cu126/`
 实测快 3.5 倍，但只有扁平目录、无 PEP503 索引，uv 无法直接解析）：
 
 ```bash
-uv pip install --no-index --no-deps --find-links D:\torch-wheels "torch==2.14.0+cu126"
+uv pip install --no-index --no-deps --find-links D:\torch-wheels \
+    "torch==2.14.0+cu126" "torchvision==0.29.0+cu126"
 ```
 
-Linux 环境无需此步骤（PyPI 的 Linux torch 自带 CUDA）。
+只需 CPU 的环境（容器 / CI）改用 CPU 通道，**同样要两个包一起换**：
+
+```bash
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --upgrade
+```
 
 `.env` 关键配置（完整清单与逐项说明见 `.env.example`）：
 
@@ -306,7 +307,7 @@ XiaoDan-Da/
 ## 运行测试
 
 ```bash
-uv run pytest tests/ -v                      # 全量（78 项）
+uv run pytest tests/ -v                      # 全量（79 项）
 uv run pytest tests/test_llm_clients.py -v   # 只跑某个模块
 uv run ruff check .                          # 静态检查（只做 lint，不做 format）
 uv run python -m scripts.check_synced_boundary   # 仓库边界自检（入库文件不得提到本地专用路径）
