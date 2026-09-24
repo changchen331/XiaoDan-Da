@@ -139,6 +139,9 @@ data/
     └── emotion_eval.json       # 情绪评测集：[{id, text, label}]
 ```
 
+`faq.json` 可由 `python -m scripts.build_faq` 生成：从校内**公开** FAQ 页面抽取问答
+（答案一律取自原文，模型只补相似问法与标签），产物落 `data/raw/faq.json`。
+
 `faq.json` 格式示例：
 
 ```json
@@ -284,7 +287,7 @@ XiaoDan-Da/
 │   └── red_team.py               #   安全红队测试（30 用例）
 ├── observability/                # Langfuse 全链路追踪（开关式）
 ├── deployment/                   # 模块五：FastAPI 服务 + Dockerfile
-├── scripts/                      # 索引构建 / 语料与评测集合成 / 情绪模型训练
+├── scripts/                      # 索引构建 / FAQ 题库抽取 / 语料与评测集合成 / 情绪模型训练
 ├── tests/                        # 单元测试（按模块对齐拆分，无外部依赖）
 │   ├── test_llm_clients.py       #   三级降级链 / 连接复用 / 思考模式开关 / 应答来源上报
 │   ├── test_agent_nodes.py       #   意图路由与语言偏好 / FAQ 轻量校验 / 关怀后缀 / 条件路由 / 红队回归
@@ -303,6 +306,6 @@ uv run pytest tests/ -v                      # 全量
 uv run pytest tests/test_llm_clients.py -v   # 只跑某个模块
 ```
 
-覆盖规则引擎、切分策略、文本清洗、三级降级、FAQ 校验信任策略、关怀后缀分级、
+覆盖规则引擎、切分策略、文本清洗、三级降级、FAQ 校验信任策略与匹配/校验输入口径、关怀后缀分级、
 条件路由、意图兜底与语言偏好、学期计算、JSON 解析、思考模式开关、数据库连接、
 索引幂等等核心逻辑，不依赖任何外部服务（LLM / 数据库 / 向量库），全部通过。

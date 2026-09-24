@@ -47,29 +47,43 @@ def build_filter_expr(user_profile: dict, include_audience: bool = True) -> str:
     return f'metadata["target_audience"] in [{audience_list}] and {semester_condition}'
 
 
-def _faq_precheck(query: str, response_language: str) -> dict | None:
+def _faq_precheck(
+    query: str, response_language: str, user_input: str | None = None
+) -> dict | None:
     """FAQ 快路径预查：索引匹配 + 轻量校验。
 
-    :param query: 改写后的检索 query
+    :param query: 改写后的检索 query（规范化后的问法，利于匹配规范表述）
     :param response_language: 用户期望的回复语言
+    :param user_input: 用户**原话**。它与改写 query 各有用处，故**两条都参与匹配、
+        取相似度更高者**：实测"论文到底要交到哪儿去？"原话命中 0.953、
+        改写后只有 0.855（贴着 0.85 阈值，命中与否随机）；
+        而"云邮箱能发多大的附件？"两条分别 0.966 / 0.863。
+        只用一个会让快路径在阈值边缘抖动，故两个都试（多一次向量检索，成本极低）。
     :return: 可直返的命中结果 {"question", "answer", "score"}；
         未命中 / 阈值不足 / 校验拒绝 / 索引异常均返回 None（走慢路径）
     """
     from knowledge_base.faq import get_faq_index
 
-    try:
-        matched = get_faq_index().match(query)
-    except Exception as faq_error:
-        # FAQ 索引异常（Milvus 不可达等）：静默降级到通用检索，流程不中断
-        print(f"[retrieve] FAQ 预查异常，降级通用检索: {faq_error}")
-        return None
+    matched: dict | None = None
+    for candidate in {user_input, query} - {None, ""}:
+        try:
+            hit = get_faq_index().match(candidate)
+        except Exception as faq_error:
+            # FAQ 索引异常（Milvus 不可达等）：静默降级到通用检索，流程不中断
+            print(f"[retrieve] FAQ 预查异常，降级通用检索: {faq_error}")
+            return None
+        if hit is not None and (matched is None or hit["score"] > matched["score"]):
+            matched = hit
 
     if matched is None:
         return None
 
-    # 高阈值命中后做轻量校验：防"问 A 答 B"与语言不匹配的直返
-    if not verify_faq_match(query, matched["question"], matched["answer"],
-                            response_language):
+    # 高阈值命中后做轻量校验：防"问 A 答 B"与语言不匹配的直返。
+    # 校验用**用户原话**——改写会把问法放宽（实测"…是什么？"被改写成
+    # "…介绍及使用指南"），拿它校验会把简短的标准答案判成"答不全"而误拒
+    if not verify_faq_match(
+        user_input or query, matched["question"], matched["answer"], response_language
+    ):
         print(f"[retrieve] FAQ 命中被校验拒绝（相似度 {matched['score']:.3f}）: "
               f"{matched['question']}")
         return None
@@ -95,7 +109,8 @@ def retrieve(state: AgentState) -> dict:
     retry_count = state.get("retry_count", 0)
 
     # ===== 快路径：FAQ 专用索引预查 =====
-    matched = _faq_precheck(query, response_language)
+    # 匹配用改写 query（召回），校验用用户原话（判定是否答得其所问），见 _faq_precheck
+    matched = _faq_precheck(query, response_language, state.get("user_input"))
     if matched is not None:
         return {
             "faq_hit": True,

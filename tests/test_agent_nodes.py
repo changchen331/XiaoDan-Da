@@ -358,6 +358,76 @@ def test_memory_write_passthrough_final_response(
     assert captured["summary"] == "用户问了选课截止时间"
 
 
+# ==================== FAQ 快路径：匹配与校验的输入口径（阶段三 #1/#3） ====================
+
+
+class _StubFaqIndex:
+    """FAQ 索引桩：按 query 返回预设相似度，避免测试连 Milvus。"""
+
+    def __init__(self, scores: dict) -> None:
+        self.scores = scores
+
+    def match(self, query: str) -> dict | None:
+        if query not in self.scores:
+            return None
+        return {
+            "question": f"标准问题（{query}）",
+            "answer": "标准答案正文，长度足够通过校验。",
+            "score": self.scores[query],
+        }
+
+
+def test_faq_precheck_verifies_with_user_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAQ 校验必须用**用户原话**，而不是改写后的 query。
+
+    实测缺陷：意图路由把"复旦大学图书馆学位论文提交系统是什么？"改写成
+    "…介绍及使用指南"，改写把问法放宽了，校验器于是判标准答案"答不全"
+    （answer_match=false），相似度 0.917 的高置信命中被误拒、快路径整条失效。
+    """
+    import importlib
+
+    retrieve_module = importlib.import_module("agent.nodes.retrieve")
+
+    monkeypatch.setattr(
+        "knowledge_base.faq.get_faq_index",
+        lambda: _StubFaqIndex({"用户原话问句": 0.95}),
+    )
+    captured: dict = {}
+
+    def _fake_verify(query: str, question: str, answer: str, language: str) -> bool:
+        captured["query"] = query
+        return True
+
+    monkeypatch.setattr(retrieve_module, "verify_faq_match", _fake_verify)
+    matched = retrieve_module._faq_precheck("改写后的问句", "中文", "用户原话问句")
+
+    assert matched is not None
+    assert captured["query"] == "用户原话问句"
+
+
+def test_faq_precheck_takes_higher_score_of_both_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """原话与改写 query **都参与匹配、取更高分**。
+
+    实测：同一个问题用原话命中 0.953、用改写只有 0.855——后者贴着 0.85 阈值，
+    命中与否随改写措辞抖动。只用一个会让快路径时灵时不灵。
+    """
+    import importlib
+
+    retrieve_module = importlib.import_module("agent.nodes.retrieve")
+
+    monkeypatch.setattr(
+        "knowledge_base.faq.get_faq_index",
+        lambda: _StubFaqIndex({"改写问句": 0.86, "原话问句": 0.95}),
+    )
+    monkeypatch.setattr(retrieve_module, "verify_faq_match", lambda *a, **k: True)
+
+    matched = retrieve_module._faq_precheck("改写问句", "中文", "原话问句")
+    assert matched is not None
+    assert matched["score"] == 0.95
+
+
 # ==================== 红队失败项回归（v2-plan 2.1 #13） ====================
 
 
@@ -414,7 +484,9 @@ def test_retrieve_relaxes_retrieval_on_retry(monkeypatch: pytest.MonkeyPatch) ->
     fake_retrieval = types.ModuleType("knowledge_base.retrieval")
     fake_retrieval.get_retrieval_service = lambda: _FakeService()
     monkeypatch.setitem(sys.modules, "knowledge_base.retrieval", fake_retrieval)
-    monkeypatch.setattr(retrieve_module, "_faq_precheck", lambda query, language: None)
+    monkeypatch.setattr(
+        retrieve_module, "_faq_precheck", lambda query, language, user_input=None: None
+    )
 
     state = {
         "user_input": "选课截止时间",
